@@ -1009,6 +1009,7 @@ name = "datamodel-connector"
 version = "0.1.0"
 dependencies = [
  "dml",
+ "enumflags2 0.6.4",
  "itertools 0.8.2",
  "serde_json",
  "thiserror",
@@ -1074,6 +1075,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "cuid",
+ "enumflags2 0.6.4",
  "native-types",
  "prisma-value",
  "serde",
@@ -2475,6 +2477,7 @@ version = "0.1.0"
 dependencies = [
  "datamodel-connector",
  "dml",
+ "enumflags2 0.6.4",
  "lazy_static",
  "native-types",
  "once_cell",
@@ -4282,6 +4285,7 @@ version = "0.1.0"
 dependencies = [
  "datamodel-connector",
  "dml",
+ "enumflags2 0.6.4",
  "native-types",
  "once_cell",
  "regex",
