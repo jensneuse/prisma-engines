@@ -4,6 +4,9 @@ CONFIG_FILE = .test_config
 
 default: build
 
+build-c-api:
+	cd query-engine/query-engine-c-api && cargo build --release
+
 build:
 	cargo build
 

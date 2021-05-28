@@ -19,6 +19,7 @@ members = [
   "query-engine/core",
   "query-engine/query-engine",
   "query-engine/query-engine-napi",
+  "query-engine/query-engine-c-api",
   "query-engine/connector-test-kit-rs/query-engine-tests",
   "query-engine/request-handlers",
   "prisma-fmt",
