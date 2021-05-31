@@ -31,7 +31,7 @@ impl Introspection {
 
         let connector = match SqlIntrospectionConnector::new(url.as_str()).await {
             introspection_connector::ConnectorResult::Ok(connector) => connector,
-            introspection_connector::ConnectorResult::Err(_) => panic!("unable to connect"),
+            introspection_connector::ConnectorResult::Err(e) => return Result::Err(Error::ConnectorError(e)),
         };
         let datamodel = Datamodel::new();
         let result = match connector.introspect(&datamodel).await {

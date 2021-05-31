@@ -101,11 +101,7 @@ impl QueryEngine {
     pub fn new(schema: String) -> Result<Self, Error> {
         set_panic_hook();
 
-        let options = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(QueryEngine::introspect(schema.clone())) {
+        let options = match crate::RUNTIME.block_on(QueryEngine::introspect(schema.clone())) {
             Ok(options) => options,
             Err(e) => return Err(e)
         };
@@ -213,21 +209,6 @@ impl QueryEngine {
                     executor,
                     config,
                 };
-
-                for n in 1..11 {
-                    let data = r#"
-                    {
-                        "query": "query Messages {findManymessages(take: 20 orderBy: [{id: desc}]){id message users {id name}}}",
-                        "variables": {}
-                    }"#;
-
-                    let body: GraphQlBody = serde_json::from_str(data).unwrap();
-
-                    let handler = GraphQlHandler::new(engine.executor(), engine.query_schema());
-                    let result = handler.handle(body).await;
-                    let data = serde_json::to_string(&result).unwrap();
-                    println!("result(connect:{}): {}", n, data);
-                }
 
                 *inner = Inner::Connected(engine);
 

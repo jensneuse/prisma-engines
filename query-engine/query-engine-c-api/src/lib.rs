@@ -1,3 +1,5 @@
+#![feature(once_cell)]
+
 mod introspection;
 mod engine_old;
 mod context;
@@ -19,30 +21,14 @@ use crate::error::ApiError;
 use crate::engine_old::Engine;
 use std::sync::Arc;
 use request_handlers::{GraphQlBody, PrismaResponse};
+use tokio::runtime::Runtime;
+use once_cell::sync::Lazy;
 
-#[no_mangle]
-pub extern "C" fn hello(name: *const c_char) {
-    let buf_name = unsafe { CStr::from_ptr(name).to_bytes() };
-    let str_name = String::from_utf8(buf_name.to_vec()).unwrap();
-
-    let introspection_fut = Introspection::introspect(str_name);
-
-    let res = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(introspection_fut);
-
-    let schema = match res {
-        introspection::Result::Ok(schema) => schema,
-        introspection::Result::Err(_) => String::from(""),
-    };
-
-    println!("schema\n{}", schema);
-}
+static RUNTIME: Lazy<Runtime> = Lazy::new(|| Runtime::new().unwrap());
 
 pub struct IntrospectionResult {
     schema: *mut c_char,
+    sdl: *mut c_char,
     error: *mut c_char,
 }
 
@@ -53,31 +39,63 @@ pub extern "C" fn prisma_introspect(schema: *const c_char) -> *const Introspecti
 
     let introspection_fut = Introspection::introspect(str_schema);
 
-    let res = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(introspection_fut);
+    let res = RUNTIME.block_on(introspection_fut);
 
     let result = match res {
         introspection::Result::Ok(schema) => {
-            let str_schema = CString::new(schema).unwrap();
-            let err = CString::new("").unwrap();
+            let engine = match QueryEngine::new(schema.clone()) {
+                Ok(engine) => engine,
+                Err(e) => {
+                    let error_cstring = CString::new(e.to_string()).unwrap();
+                    return &IntrospectionResult {
+                        sdl: null_mut(),
+                        schema: null_mut(),
+                        error: error_cstring.to_owned().into_raw(),
+                    };
+                }
+            };
+            match RUNTIME.block_on(engine.connect()) {
+                Ok(_) => {}
+                Err(_) => {
+                    let error_cstring = CString::new(String::from("unable to connect engine")).unwrap();
+                    return &IntrospectionResult {
+                        schema: null_mut(),
+                        sdl: null_mut(),
+                        error: error_cstring.to_owned().into_raw(),
+                    };
+                }
+            };
+            let sdl = match RUNTIME.block_on(engine.sdl_schema()) {
+                Ok(sdl) => sdl,
+                Err(e) => {
+                    let error_cstring = CString::new(String::from("sdl_schema error")).unwrap();
+                    return &IntrospectionResult {
+                        schema: null_mut(),
+                        sdl: null_mut(),
+                        error: error_cstring.to_owned().into_raw(),
+                    };
+                }
+            };
+            RUNTIME.block_on(engine.disconnect());
+            let str_schema = CString::new(schema.clone()).unwrap();
+            let str_sdl = CString::new(sdl.clone()).unwrap();
             IntrospectionResult {
                 schema: str_schema.to_owned().into_raw(),
+                sdl: str_sdl.to_owned().into_raw(),
                 error: null_mut(),
             }
         }
         introspection::Result::Err(e) => {
-            let str_schema = CString::new("").unwrap();
             let err = CString::new(e.to_string()).unwrap();
             IntrospectionResult {
                 schema: null_mut(),
+                sdl: null_mut(),
                 error: err.to_owned().into_raw(),
             }
         }
     };
-    &result
+    let b = Box::new(result);
+    Box::into_raw(b)
 }
 
 #[no_mangle]
@@ -94,7 +112,11 @@ pub extern "C" fn free_cstring(s: *mut c_char) {
 #[no_mangle]
 pub extern "C" fn free_introspection_result(ptr: *const IntrospectionResult) {
     unsafe {
+        if ptr.is_null() {
+            return
+        }
         let schema = (*ptr).schema;
+        let sdl = (*ptr).sdl;
         let error = (*ptr).error;
         if !schema.is_null() {
             CString::from_raw(schema);
@@ -102,6 +124,11 @@ pub extern "C" fn free_introspection_result(ptr: *const IntrospectionResult) {
         if !error.is_null() {
             CString::from_raw(error);
         }
+        if !sdl.is_null() {
+            CString::from_raw(sdl);
+        }
+        let ptr = ptr as *mut IntrospectionResult;
+        Box::from_raw(ptr)
     };
 }
 
@@ -126,18 +153,15 @@ pub extern "C" fn prisma_new(schema: *const c_char) -> *const Prisma {
 
     let engine = match QueryEngine::new(str_schema.clone()) {
         Ok(engine) => engine,
-        Err(err) => {
-            println!("{}", err.to_string());
+        Err(_) => {
             return null();
         }
     };
 
-    /*let engine_future = Engine::new(str_schema.clone());
-
-    let engine = match resolve_future(engine_future) {
-        Ok(engine) => engine,
+    match RUNTIME.block_on(engine.connect()) {
+        Ok(_) => {}
         Err(_) => return null()
-    };*/
+    };
 
     let prisma = Prisma {
         schema: str_schema,
@@ -145,57 +169,17 @@ pub extern "C" fn prisma_new(schema: *const c_char) -> *const Prisma {
     };
 
     let b = Box::new(prisma);
-    let ptr = Box::into_raw(b);
-
-    unsafe {
-        match resolve_future((*ptr).engine.connect()) {
-            Ok(_) => {
-                println!("engine connected")
-            }
-            Err(e) => {
-                return null();
-            }
-        };
-    }
-
-    /*for n in 1..11 {
-        let data = r#"
-        {
-            "query": "query AllUsers {findManyusers(take: 20){id name email}}",
-            "variables": {}
-        }"#;
-
-        let body: GraphQlBody = serde_json::from_str(data).unwrap();
-
-        let future = unsafe { (*ptr).engine.query(body) };
-        match resolve_future(future) {
-            Ok(res) => {
-                let data = serde_json::to_string(&res).unwrap();
-                println!("result(prisma_new:{}): {}", n, data)
-            }
-            Err(_) => {
-                println!("result(prisma_new:{})", n)
-            }
-        };
-    }*/
-
-    ptr
+    Box::into_raw(b)
 }
 
 #[no_mangle]
-pub extern "C" fn prisma_execute(ptr: *const Prisma) -> *mut c_char {
-
-    let data = r#"
-        {
-            "query": "query Messages {findManymessages(take: 20 orderBy: [{id: desc}]){id message users {id name}}}",
-            "variables": {}
-        }"#;
-
-    let body: GraphQlBody = serde_json::from_str(data).unwrap();
-
+pub extern "C" fn prisma_execute(ptr: *const Prisma, query: *const c_char) -> *mut c_char {
     let engine = unsafe { (*ptr).engine.clone() };
+    let query_buf = unsafe { CStr::from_ptr(query).to_bytes() };
+    let query_str = String::from_utf8(query_buf.to_vec()).unwrap();
+    let body: GraphQlBody = serde_json::from_str(&query_str).unwrap();
     let future = unsafe { engine.query(body) };
-    let response = match resolve_future(future) {
+    let response = match RUNTIME.block_on(future) {
         Ok(res) => serde_json::to_string(&res).unwrap(),
         Err(e) => match e {
             ApiError::Conversion(e, e2) => e2,
@@ -213,67 +197,32 @@ pub extern "C" fn prisma_execute(ptr: *const Prisma) -> *mut c_char {
     }
 }
 
-/*#[no_mangle]
-pub extern "C" fn prisma_connect(ptr: *const Prisma) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let engine = unsafe { (*ptr).engine.clone() };
-    let connect_future = engine.connect();
-    match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(connect_future) {
-        Ok(_) => return 1,
-        Err(e) => {
-            println!("{}", e);
-            return 0;
-        }
-    }
-}
-*/
 #[no_mangle]
-pub extern "C" fn prisma_disconnect(ptr: *const Prisma) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let engine = unsafe { (*ptr).engine.clone() };
-    resolve_future(engine.disconnect());
-    1
-}
-
-#[no_mangle]
-pub extern "C" fn free_prisma(ptr: *mut Prisma) {
+pub extern "C" fn free_prisma(ptr: *const Prisma) {
     unsafe {
-        (*ptr).engine.disconnect();
+        let engine = unsafe { (*ptr).engine.clone() };
+        RUNTIME.block_on(engine.disconnect());
+        let ptr = ptr as *mut Prisma;
         Box::from_raw(ptr);
     }
 }
 
 #[no_mangle]
 pub extern "C" fn prisma_get_schema(ptr: *const Prisma) -> *mut c_char {
-    let schema = unsafe { (*ptr).schema.as_str() };
+    let schema = unsafe { (*ptr).schema.clone() };
     unsafe {
-        let str_schema = CString::new(schema).unwrap().to_owned();
+        let str_schema = CString::new(schema.as_str()).unwrap().to_owned();
         str_schema.into_raw()
     }
 }
 
-fn resolve_future<F: Future>(future: F) -> F::Output {
-    return tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(future);
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::{prisma_introspect, prisma_new, prisma_execute, resolve_future};
+    use crate::{prisma_introspect, prisma_new, prisma_execute, free_prisma, free_introspection_result};
     use crate::CString;
     use crate::CStr;
     use crate::engine_old::Engine;
+    use crate::Prisma;
     use introspection_core::Error;
     use std::ptr::null;
 
@@ -281,15 +230,24 @@ mod tests {
     fn valid_introspection() {
         let schema = "datasource db {
 		provider = \"postgresql\"
-		url      = \"postgresql://admin:admin@localhost:15432/wundergraph?schema=wg\"
+		url      = \"postgresql://admin:admin@localhost:54321/example?schema=public&connection_limit=5&pool_timeout=2\"
 	}";
         let schema = CString::new(schema.to_string()).unwrap().to_owned().into_raw();
         let result = prisma_introspect(schema);
         unsafe {
-            let cstring_schema = CString::from_raw((*result).schema);
-            let str_schema = cstring_schema.to_str().unwrap().to_string();
             assert_eq!((*result).schema.is_null(), false);
-            assert_ne!(str_schema, "")
+            assert_eq!((*result).sdl.is_null(), false);
+            assert_eq!((*result).error.is_null(), true);
+
+            /*let cstring_schema = CString::from_raw((*result).schema);
+            let str_schema = cstring_schema.to_str().unwrap().to_string();
+            assert_ne!(str_schema, "");
+
+            let cstring_sdl = CString::from_raw((*result).sdl);
+            let str_sdl = cstring_sdl.to_str().unwrap().to_string();
+            assert_ne!(str_sdl, "");*/
+
+            free_introspection_result(result);
         }
     }
 
@@ -299,6 +257,11 @@ mod tests {
 		provider = \"postgresql\"
 		url      = \"postgresql://admin:admin@localhost:54321/example?schema=public&connection_limit=5&pool_timeout=2\"
 	}";
+        let data = r#"
+        {
+            "query": "query Messages {findManymessages(take: 20 orderBy: [{id: desc}]){id message users {id name}}}",
+            "variables": {}
+        }"#;
         unsafe {
             let schema = CString::new(schema.to_string()).unwrap().to_owned().into_raw();
             let intro = prisma_introspect(schema);
@@ -308,7 +271,8 @@ mod tests {
             assert_eq!(prisma.is_null(), false);
 
             for n in 1..7 {
-                let result = prisma_execute(prisma);
+                let query_cstring = CString::new(data.clone()).unwrap().to_owned().into_raw();
+                let result = prisma_execute(prisma, query_cstring);
                 assert_eq!(result.is_null(), false);
 
                 let result_cstring = CString::from_raw(result);
@@ -316,6 +280,8 @@ mod tests {
 
                 println!("result(prisma_execute:{}): {}", n, result_str);
             }
+
+            free_prisma(prisma)
         }
     }
 }

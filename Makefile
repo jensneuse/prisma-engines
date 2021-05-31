@@ -4,8 +4,19 @@ CONFIG_FILE = .test_config
 
 default: build
 
-build-c-api:
-	cd query-engine/query-engine-c-api && cargo build --release
+build-c-api: build-c-api-darwin build-c-api-darwin-aarch64 build-c-api-linux build-c-api-windows
+
+build-c-api-darwin:
+	cargo build --package query-engine-c-api --target x86_64-apple-darwin --release
+
+build-c-api-darwin-aarch64:
+	SDKROOT=$(xcrun -sdk macosx11.3 --show-sdk-path) && MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.3 --show-sdk-platform-version) && cargo build --target=aarch64-apple-darwin --package query-engine-c-api --release
+
+build-c-api-linux:
+	cross build --package query-engine-c-api --target x86_64-unknown-linux-gnu --release
+
+build-c-api-windows:
+	cross build --package query-engine-c-api --target x86_64-pc-windows-gnu --release
 
 build:
 	cargo build
