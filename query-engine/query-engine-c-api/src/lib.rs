@@ -238,15 +238,6 @@ mod tests {
             assert_eq!((*result).schema.is_null(), false);
             assert_eq!((*result).sdl.is_null(), false);
             assert_eq!((*result).error.is_null(), true);
-
-            /*let cstring_schema = CString::from_raw((*result).schema);
-            let str_schema = cstring_schema.to_str().unwrap().to_string();
-            assert_ne!(str_schema, "");
-
-            let cstring_sdl = CString::from_raw((*result).sdl);
-            let str_sdl = cstring_sdl.to_str().unwrap().to_string();
-            assert_ne!(str_sdl, "");*/
-
             free_introspection_result(result);
         }
     }
