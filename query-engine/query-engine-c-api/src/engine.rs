@@ -224,9 +224,8 @@ impl QueryEngine {
 
         match *inner {
             Inner::Connected(ref engine) => {
-                let config = datamodel::parse_configuration_with_url_overrides(
+                let config = datamodel::parse_configuration(
                     &engine.datamodel.raw,
-                    engine.datamodel.datasource_overrides.clone(),
                 )
                     .map_err(|errors| ApiError::conversion(errors, &engine.datamodel.raw))?;
 

@@ -8,15 +8,21 @@ build-c-api: build-c-api-darwin build-c-api-darwin-aarch64 build-c-api-linux bui
 
 build-c-api-darwin:
 	cargo build --package query-engine-c-api --target x86_64-apple-darwin --release
+	install_name_tool -id "@rpath/libquery_engine_c_api.dylib" target/x86_64-apple-darwin/release/libquery_engine_c_api.dylib
+	cp target/x86_64-apple-darwin/release/libquery_engine_c_api.dylib ../goprisma/lib/darwin
 
 build-c-api-darwin-aarch64:
 	SDKROOT=$(xcrun -sdk macosx11.3 --show-sdk-path) && MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.3 --show-sdk-platform-version) && cargo build --target=aarch64-apple-darwin --package query-engine-c-api --release
+	install_name_tool -id "@rpath/libquery_engine_c_api.dylib" target/aarch64-apple-darwin/release/libquery_engine_c_api.dylib
+	cp target/aarch64-apple-darwin/release/libquery_engine_c_api.dylib ../goprisma/lib/darwin-aarch64
 
 build-c-api-linux:
 	cross build --package query-engine-c-api --target x86_64-unknown-linux-gnu --release
+	cp target/x86_64-unknown-linux-gnu/release/libquery_engine_c_api.so ../goprisma/lib/linux
 
 build-c-api-windows:
 	cross build --package query-engine-c-api --target x86_64-pc-windows-gnu --release
+	cp target/x86_64-pc-windows-gnu/release/query_engine_c_api.dll ../goprisma/lib/windows
 
 build:
 	cargo build
