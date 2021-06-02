@@ -6,6 +6,7 @@ use crate::{
     DefaultValue, FieldType,
 };
 use crate::{ast::WithAttributes, walkers::walk_models};
+use itertools::Itertools;
 use prisma_value::PrismaValue;
 use std::collections::{HashMap, HashSet};
 
@@ -65,13 +66,17 @@ impl<'a> Validator<'a> {
                 }
             }
 
-            if let Err(err) = self.validate_model_has_strict_unique_criteria(
-                ast_schema.find_model(&model.name).expect(STATE_ERROR),
-                model,
-            ) {
+            let ast_model = ast_schema.find_model(&model.name).expect(STATE_ERROR);
+
+            if let Err(err) = self.validate_model_compound_ids(ast_model, model) {
                 errors_for_model.push_error(err);
             }
-            if let Err(err) = self.validate_model_name(ast_schema.find_model(&model.name).expect(STATE_ERROR), model) {
+
+            if let Err(err) = self.validate_model_has_strict_unique_criteria(ast_model, model) {
+                errors_for_model.push_error(err);
+            }
+
+            if let Err(err) = self.validate_model_name(ast_model, model) {
                 errors_for_model.push_error(err);
             }
 
@@ -79,55 +84,35 @@ impl<'a> Validator<'a> {
                 errors_for_model.push_error(err);
             }
 
-            if let Err(ref mut the_errors) =
-                self.validate_field_arities(ast_schema.find_model(&model.name).expect(STATE_ERROR), model)
-            {
+            if let Err(ref mut the_errors) = self.validate_field_arities(ast_model, model) {
                 errors_for_model.append(the_errors);
             }
 
-            if let Err(ref mut the_errors) =
-                self.validate_field_types(ast_schema.find_model(&model.name).expect(STATE_ERROR), model)
-            {
+            if let Err(ref mut the_errors) = self.validate_field_types(ast_model, model) {
                 errors_for_model.append(the_errors);
             }
 
-            if let Err(ref mut the_errors) =
-                self.validate_field_connector_specific(ast_schema.find_model(&model.name).expect(STATE_ERROR), model)
-            {
+            if let Err(ref mut the_errors) = self.validate_field_connector_specific(ast_model, model) {
                 errors_for_model.append(the_errors)
             }
 
-            if let Err(ref mut the_errors) =
-                self.validate_model_connector_specific(ast_schema.find_model(&model.name).expect(STATE_ERROR), model)
-            {
+            if let Err(ref mut the_errors) = self.validate_model_connector_specific(ast_model, model) {
                 errors_for_model.append(the_errors)
             }
 
-            if let Err(ref mut the_errors) =
-                self.validate_enum_default_values(schema, ast_schema.find_model(&model.name).expect(STATE_ERROR), model)
-            {
+            if let Err(ref mut the_errors) = self.validate_enum_default_values(schema, ast_model, model) {
                 errors_for_model.append(the_errors);
             }
 
-            if let Err(ref mut the_errors) =
-                self.validate_auto_increment(ast_schema.find_model(&model.name).expect(STATE_ERROR), model)
-            {
+            if let Err(ref mut the_errors) = self.validate_auto_increment(ast_model, model) {
                 errors_for_model.append(the_errors);
             }
 
-            if let Err(ref mut the_errors) = self.validate_base_fields_for_relation(
-                schema,
-                ast_schema.find_model(&model.name).expect(STATE_ERROR),
-                model,
-            ) {
+            if let Err(ref mut the_errors) = self.validate_base_fields_for_relation(schema, ast_model, model) {
                 errors_for_model.append(the_errors);
             }
 
-            if let Err(ref mut the_errors) = self.validate_referenced_fields_for_relation(
-                schema,
-                ast_schema.find_model(&model.name).expect(STATE_ERROR),
-                model,
-            ) {
+            if let Err(ref mut the_errors) = self.validate_referenced_fields_for_relation(schema, ast_model, model) {
                 errors_for_model.append(the_errors);
             }
 
@@ -341,40 +326,53 @@ impl<'a> Validator<'a> {
         let mut errors = Diagnostics::new();
 
         if let Some(data_source) = self.source {
-            if !data_source.active_connector.supports_multiple_auto_increment()
-                && model.auto_increment_fields().count() > 1
-            {
-                errors.push_error(DatamodelError::new_attribute_validation_error(
-                    &"The `autoincrement()` default value is used multiple times on this model even though the underlying datasource only supports one instance per table.".to_string(),
-                    "default",
-                    ast_model.span,
-                ))
-            }
+            let autoinc_fields = model.auto_increment_fields().collect_vec();
 
-            // go over all fields
-            for field in model.scalar_fields() {
-                let ast_field = ast_model.find_field(&field.name);
+            // First check if the provider supports autoincrement at all, if yes, proceed with the detailed checks.
+            if !autoinc_fields.is_empty() && !data_source.active_connector.supports_auto_increment() {
+                for field in autoinc_fields {
+                    let ast_field = ast_model.find_field(&field.name);
 
-                if !field.is_id
-                    && field.is_auto_increment()
-                    && !data_source.active_connector.supports_non_id_auto_increment()
+                    // Add an error for all autoincrement fields on the model.
+                    errors.push_error(DatamodelError::new_attribute_validation_error(
+                        &"The `autoincrement()` default value is used with a datasource that does not support it."
+                            .to_string(),
+                        "default",
+                        ast_field.span,
+                    ));
+                }
+            } else {
+                if !data_source.active_connector.supports_multiple_auto_increment()
+                    && model.auto_increment_fields().count() > 1
                 {
                     errors.push_error(DatamodelError::new_attribute_validation_error(
-                    &"The `autoincrement()` default value is used on a non-id field even though the datasource does not support this.".to_string(),
-                    "default",
-                    ast_field.span,
-                ))
+                        &"The `autoincrement()` default value is used multiple times on this model even though the underlying datasource only supports one instance per table.".to_string(),
+                        "default",
+                        ast_model.span,
+                    ))
                 }
 
-                if field.is_auto_increment()
-                    && !model.field_is_indexed(&field.name)
-                    && !data_source.active_connector.supports_non_indexed_auto_increment()
-                {
-                    errors.push_error(DatamodelError::new_attribute_validation_error(
-                    &"The `autoincrement()` default value is used on a non-indexed field even though the datasource does not support this.".to_string(),
-                    "default",
-                    ast_field.span,
-                ))
+                // go over all fields
+                for field in autoinc_fields {
+                    let ast_field = ast_model.find_field(&field.name);
+
+                    if !field.is_id && !data_source.active_connector.supports_non_id_auto_increment() {
+                        errors.push_error(DatamodelError::new_attribute_validation_error(
+                            &"The `autoincrement()` default value is used on a non-id field even though the datasource does not support this.".to_string(),
+                            "default",
+                            ast_field.span,
+                        ))
+                    }
+
+                    if !model.field_is_indexed(&field.name)
+                        && !data_source.active_connector.supports_non_indexed_auto_increment()
+                    {
+                        errors.push_error(DatamodelError::new_attribute_validation_error(
+                            &"The `autoincrement()` default value is used on a non-indexed field even though the datasource does not support this.".to_string(),
+                            "default",
+                            ast_field.span,
+                        ))
+                    }
                 }
             }
         }
@@ -443,6 +441,28 @@ impl<'a> Validator<'a> {
         }
 
         Ok(())
+    }
+
+    fn validate_model_compound_ids(&self, ast_model: &ast::Model, model: &dml::Model) -> Result<(), DatamodelError> {
+        if let Some(source) = self.source {
+            if !model.id_fields.is_empty() && !source.active_connector.supports_compound_ids() {
+                let ast_attr = ast_model
+                    .attributes()
+                    .iter()
+                    .find(|attr| &attr.name.name == "id")
+                    .unwrap();
+
+                Err(DatamodelError::new_model_validation_error(
+                    "The current connector does not support compound ids.",
+                    &model.name,
+                    ast_attr.span,
+                ))
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
     }
 
     fn validate_model_name(&self, ast_model: &ast::Model, model: &dml::Model) -> Result<(), DatamodelError> {

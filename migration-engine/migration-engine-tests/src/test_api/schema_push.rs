@@ -96,6 +96,12 @@ impl<'a> SchemaPushAssertion<'a> {
         Ok(self.assert_no_warning().assert_executable())
     }
 
+    /// Asserts that the command produced no warning and no unexecutable migration message.
+    #[track_caller]
+    pub fn assert_green_bang(self) -> Self {
+        self.assert_no_warning().assert_executable()
+    }
+
     pub fn assert_no_warning(self) -> Self {
         assert!(
             self.result.warnings.is_empty(),
@@ -106,8 +112,8 @@ impl<'a> SchemaPushAssertion<'a> {
         self
     }
 
-    pub fn assert_warnings(self, warnings: &[Cow<'_, str>]) -> AssertionResult<Self> {
-        anyhow::ensure!(
+    pub fn assert_warnings(self, warnings: &[Cow<'_, str>]) -> Self {
+        assert!(
             self.result.warnings.len() == warnings.len(),
             "Expected {} warnings, got {}.\n{:#?}",
             warnings.len(),
@@ -122,7 +128,7 @@ impl<'a> SchemaPushAssertion<'a> {
             );
         }
 
-        Ok(self)
+        self
     }
 
     #[track_caller]
@@ -154,9 +160,10 @@ impl<'a> SchemaPushAssertion<'a> {
         self
     }
 
-    pub fn assert_unexecutable(self, expected_messages: &[String]) -> AssertionResult<Self> {
-        anyhow::ensure!(
-            self.result.unexecutable.len() == expected_messages.len(),
+    pub fn assert_unexecutable(self, expected_messages: &[String]) -> Self {
+        assert_eq!(
+            self.result.unexecutable.len(),
+            expected_messages.len(),
             "Expected {} unexecutable step errors, got {}.\n({:#?})",
             expected_messages.len(),
             self.result.unexecutable.len(),
@@ -170,6 +177,6 @@ impl<'a> SchemaPushAssertion<'a> {
             assert_eq!(actual, expected);
         }
 
-        Ok(self)
+        self
     }
 }

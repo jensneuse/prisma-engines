@@ -79,8 +79,9 @@ impl MysqlFlavour {
             }
 
             tracing::info!(
-                "Connecting to user-provided shadow database at {}",
-                shadow_database_connection_string
+                "Connecting to user-provided shadow database at {}.{:?}",
+                shadow_conninfo.host(),
+                shadow_conninfo.dbname()
             );
 
             if self.reset(&conn).await.is_err() {
@@ -367,13 +368,14 @@ impl SqlFlavour for MysqlFlavour {
     }
 }
 
-#[derive(BitFlags, Debug, Clone, Copy, PartialEq)]
+#[enumflags2::bitflags]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum Circumstances {
-    LowerCasesTableNames = 1 << 0,
-    IsMysql56 = 1 << 1,
-    IsMariadb = 1 << 2,
-    IsVitess = 1 << 3,
+    LowerCasesTableNames,
+    IsMysql56,
+    IsMariadb,
+    IsVitess,
 }
 
 fn check_datamodel_for_mysql_5_6(datamodel: &Datamodel, errors: &mut Vec<String>) {

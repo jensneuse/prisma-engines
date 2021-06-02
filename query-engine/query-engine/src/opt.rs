@@ -82,6 +82,10 @@ pub struct PrismaOpt {
     #[structopt(long = "debug", short = "d")]
     pub enable_debug_mode: bool,
 
+    /// Enable query logging [env: LOG_QUERIES=y]
+    #[structopt(long, short = "o")]
+    pub log_queries: bool,
+
     /// Set the log format.
     #[structopt(long = "log-format", env = "RUST_LOG_FORMAT")]
     pub log_format: Option<String>,
@@ -143,12 +147,13 @@ impl PrismaOpt {
         let config_result = if ignore_env_errors {
             datamodel::parse_configuration(datamodel_str)
         } else {
-            datamodel::parse_configuration_with_url_overrides(datamodel_str, datasource_url_overrides).and_then(
-                |config| {
-                    config.subject.datasources[0].load_url()?;
-                    Ok(config)
-                },
-            )
+            datamodel::parse_configuration(datamodel_str).and_then(|mut config| {
+                config
+                    .subject
+                    .resolve_datasource_urls_from_env(&datasource_url_overrides)?;
+
+                Ok(config)
+            })
         };
         config_result.map_err(|errors| PrismaError::ConversionError(errors, datamodel_str.to_string()))
     }
@@ -164,6 +169,11 @@ impl PrismaOpt {
     /// The unix path to listen on.
     pub(crate) fn unix_path(&self) -> Option<&String> {
         self.unix_path.as_ref()
+    }
+
+    /// Enable query logging
+    pub(crate) fn log_queries(&self) -> bool {
+        std::env::var("LOG_QUERIES").map(|_| true).unwrap_or(self.log_queries)
     }
 }
 

@@ -116,7 +116,7 @@ impl CliCommand {
         let config = &mut req.config;
 
         if !req.ignore_env_var_errors {
-            config.subject.resolve_datasource_urls_from_env()?;
+            config.subject.resolve_datasource_urls_from_env(&[])?;
         }
 
         let json = datamodel::json::mcf::config_to_mcf_json_value(&config);
@@ -131,14 +131,14 @@ impl CliCommand {
         let decoded = base64::decode(&request.query)?;
         let decoded_request = String::from_utf8(decoded)?;
 
-        let cx = PrismaContext::builder(
-            request.config.validate_that_one_datasource_is_provided()?,
-            request.datamodel,
-        )
-        .legacy(request.legacy)
-        .enable_raw_queries(request.enable_raw_queries)
-        .build()
-        .await?;
+        request.config.validate_that_one_datasource_is_provided()?;
+
+        let cx = PrismaContext::builder(request.config, request.datamodel)
+            .legacy(request.legacy)
+            .enable_raw_queries(request.enable_raw_queries)
+            .build()
+            .await?;
+
         let cx = Arc::new(cx);
 
         let handler = GraphQlHandler::new(&*cx.executor, cx.query_schema());

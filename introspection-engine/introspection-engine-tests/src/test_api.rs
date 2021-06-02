@@ -1,24 +1,17 @@
 pub use super::TestResult;
 pub use test_setup::{BitFlags, Capabilities, Tags};
 
-use crate::BarrelMigrationExecutor;
+use crate::{BarrelMigrationExecutor, Result};
 use datamodel::{Configuration, Datamodel};
-use eyre::{Context, Report, Result};
 use introspection_connector::{DatabaseMetadata, IntrospectionConnector, Version};
 use introspection_core::rpc::RpcImpl;
 use migration_connector::MigrationConnector;
-use quaint::{
-    prelude::{ConnectionInfo, SqlFamily},
-    single::Quaint,
-};
+use quaint::{prelude::SqlFamily, single::Quaint};
 use sql_introspection_connector::SqlIntrospectionConnector;
 use sql_migration_connector::SqlMigrationConnector;
-use sql_schema_describer::{
-    mssql, mysql,
-    postgres::{self, Circumstances},
-    sqlite, SqlSchema, SqlSchemaDescriberBackend,
-};
-use test_setup::{sqlite_test_url, TestApiArgs};
+use sql_schema_describer::SqlSchema;
+use std::fmt::Write;
+use test_setup::{sqlite_test_url, DatasourceBlock, TestApiArgs};
 use tracing::Instrument;
 
 pub struct TestApi {
@@ -62,8 +55,8 @@ impl TestApi {
 
         TestApi {
             api,
-            args,
             database,
+            args,
             connection_string,
         }
     }
@@ -77,47 +70,7 @@ impl TestApi {
     }
 
     pub async fn describe_schema(&self) -> Result<SqlSchema> {
-        match &self.database.connection_info() {
-            ConnectionInfo::Mssql(url) => {
-                let sql_schema = mssql::SqlSchemaDescriber::new(self.database.clone())
-                    .describe(url.schema())
-                    .await?;
-
-                Ok(sql_schema)
-            }
-            ConnectionInfo::Postgres(url) => {
-                let sql_schema = postgres::SqlSchemaDescriber::new(
-                    self.database.clone(),
-                    if self.tags().contains(Tags::Cockroach) {
-                        Circumstances::Cockroach.into()
-                    } else {
-                        Default::default()
-                    },
-                )
-                .describe(url.schema())
-                .await?;
-
-                Ok(sql_schema)
-            }
-            ConnectionInfo::Mysql(_url) => {
-                let sql_schema = mysql::SqlSchemaDescriber::new(self.database.clone())
-                    .describe(self.database.connection_info().schema_name())
-                    .await?;
-
-                Ok(sql_schema)
-            }
-            ConnectionInfo::Sqlite {
-                file_path: _,
-                db_name: _,
-            }
-            | ConnectionInfo::InMemorySqlite { .. } => {
-                let sql_schema = sqlite::SqlSchemaDescriber::new(self.database.clone())
-                    .describe(self.database.connection_info().schema_name())
-                    .await?;
-
-                Ok(sql_schema)
-            }
-        }
+        Ok(self.api.describe().await?)
     }
 
     pub async fn introspect(&self) -> Result<String> {
@@ -128,10 +81,15 @@ impl TestApi {
         ))
     }
 
+    pub fn is_cockroach(&self) -> bool {
+        self.tags().contains(Tags::Cockroach)
+    }
+
     #[tracing::instrument(skip(self, data_model_string))]
+    #[track_caller]
     pub async fn re_introspect(&self, data_model_string: &str) -> Result<String> {
         let config = self.configuration();
-        let data_model = parse_datamodel(data_model_string).context("parsing datamodel")?;
+        let data_model = parse_datamodel(data_model_string);
 
         let introspection_result = self
             .api
@@ -147,7 +105,7 @@ impl TestApi {
     }
 
     pub async fn re_introspect_warnings(&self, data_model_string: &str) -> Result<String> {
-        let data_model = parse_datamodel(data_model_string)?;
+        let data_model = parse_datamodel(data_model_string);
         let introspection_result = self.api.introspect(&data_model).await?;
 
         Ok(serde_json::to_string(&introspection_result.warnings)?)
@@ -211,16 +169,17 @@ impl TestApi {
         self.args.tags()
     }
 
-    pub fn datasource_block(&self) -> String {
-        self.args.datasource_block(&self.connection_string)
+    pub fn datasource_block(&self) -> DatasourceBlock<'_> {
+        self.args.datasource_block(&self.connection_string, &[])
     }
 
     pub fn configuration(&self) -> Configuration {
-        datamodel::parse_configuration(&self.datasource_block())
+        datamodel::parse_configuration(&self.datasource_block().to_string())
             .unwrap()
             .subject
     }
 
+    #[track_caller]
     pub fn assert_eq_datamodels(&self, expected_without_header: &str, result_with_header: &str) {
         let parsed_expected = datamodel::parse_datamodel(&self.dm_with_sources(expected_without_header))
             .unwrap()
@@ -238,16 +197,13 @@ impl TestApi {
     pub fn dm_with_sources(&self, schema: &str) -> String {
         let mut out = String::with_capacity(320 + schema.len());
 
-        out.push_str(&self.datasource_block());
-        out.push_str(schema);
+        write!(out, "{}\n{}", self.datasource_block(), schema).unwrap();
 
         out
     }
 }
 
-fn parse_datamodel(dm: &str) -> Result<Datamodel> {
-    match RpcImpl::parse_datamodel(dm) {
-        Ok(dm) => Ok(dm),
-        Err(e) => Err(Report::msg(serde_json::to_string_pretty(&e.data).unwrap())),
-    }
+#[track_caller]
+fn parse_datamodel(dm: &str) -> Datamodel {
+    RpcImpl::parse_datamodel(dm).unwrap()
 }

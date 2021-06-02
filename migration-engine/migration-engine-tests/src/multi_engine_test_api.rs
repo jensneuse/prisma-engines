@@ -8,17 +8,20 @@ pub use test_setup::{BitFlags, Capabilities, Tags};
 
 use crate::{ApplyMigrations, CreateMigration, DiagnoseMigrationHistory, Reset, SchemaAssertion, SchemaPush};
 use migration_core::GenericApi;
-use quaint::{prelude::Queryable, single::Quaint};
+use quaint::{
+    prelude::{Queryable, ResultSet},
+    single::Quaint,
+};
 use sql_migration_connector::SqlMigrationConnector;
 use std::future::Future;
 use tempfile::TempDir;
-use test_setup::TestApiArgs;
+use test_setup::{DatasourceBlock, TestApiArgs};
 
 /// The multi-engine test API.
 pub struct TestApi {
     pub(crate) args: TestApiArgs,
     connection_string: String,
-    admin_conn: Quaint,
+    pub(crate) admin_conn: Quaint,
     pub(crate) rt: tokio::runtime::Runtime,
 }
 
@@ -63,8 +66,8 @@ impl TestApi {
 
         TestApi {
             args,
-            admin_conn,
             connection_string,
+            admin_conn,
             rt,
         }
     }
@@ -75,7 +78,7 @@ impl TestApi {
     }
 
     /// Equivalent to quaint's query_raw()
-    pub fn query_raw(&self, sql: &str, params: &[quaint::Value<'_>]) -> quaint::Result<quaint::prelude::ResultSet> {
+    pub fn query_raw(&self, sql: &str, params: &[quaint::Value<'_>]) -> quaint::Result<ResultSet> {
         self.block_on(self.admin_conn.query_raw(sql, params))
     }
 
@@ -95,8 +98,8 @@ impl TestApi {
     }
 
     /// Render a valid datasource block, including database URL.
-    pub fn datasource_block(&self) -> String {
-        self.args.datasource_block(self.args.database_url())
+    pub fn datasource_block(&self) -> DatasourceBlock<'_> {
+        self.args.datasource_block(self.args.database_url(), &[])
     }
 
     /// Returns true only when testing on MSSQL.

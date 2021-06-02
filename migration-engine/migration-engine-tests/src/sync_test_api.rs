@@ -1,15 +1,17 @@
-use migration_connector::MigrationPersistence;
-use tempfile::TempDir;
 pub use test_macros::test_connector;
 pub use test_setup::{BitFlags, Capabilities, Tags};
 
 use crate::{
-    multi_engine_test_api::TestApi as RootTestApi, ApplyMigrations, CreateMigration, SchemaAssertion, SchemaPush,
+    multi_engine_test_api::TestApi as RootTestApi, ApplyMigrations, CreateMigration, DevDiagnostic,
+    DiagnoseMigrationHistory, EvaluateDataLoss, ListMigrationDirectories, MarkMigrationApplied,
+    MarkMigrationRolledBack, Reset, SchemaAssertion, SchemaPush,
 };
-use quaint::prelude::{Queryable, ResultSet};
+use migration_connector::MigrationPersistence;
+use quaint::prelude::{ConnectionInfo, Queryable, ResultSet};
 use sql_migration_connector::SqlMigrationConnector;
-use std::future::Future;
-use test_setup::TestApiArgs;
+use std::{borrow::Cow, future::Future};
+use tempfile::TempDir;
+use test_setup::{DatasourceBlock, TestApiArgs};
 
 pub struct TestApi {
     root: RootTestApi,
@@ -34,6 +36,10 @@ impl TestApi {
         self.root.connection_string()
     }
 
+    pub fn connection_info(&self) -> &ConnectionInfo {
+        self.connector.quaint().connection_info()
+    }
+
     /// Plan a `createMigration` command
     pub fn create_migration<'a>(
         &'a self,
@@ -49,9 +55,34 @@ impl TestApi {
         self.root.create_migrations_directory()
     }
 
+    /// Builder and assertions to call the `devDiagnostic` command.
+    pub fn dev_diagnostic<'a>(&'a self, migrations_directory: &'a TempDir) -> DevDiagnostic<'a> {
+        DevDiagnostic::new(&self.connector, migrations_directory, &self.root.rt)
+    }
+
+    pub fn diagnose_migration_history<'a>(&'a self, migrations_directory: &'a TempDir) -> DiagnoseMigrationHistory<'a> {
+        DiagnoseMigrationHistory::new_sync(&self.connector, migrations_directory, &self.root.rt)
+    }
+
+    pub fn dump_table(&self, table_name: &str) -> ResultSet {
+        let select_star =
+            quaint::ast::Select::from_table(self.render_table_name(table_name)).value(quaint::ast::asterisk());
+
+        self.query(select_star.into())
+    }
+
+    pub fn evaluate_data_loss<'a>(&'a self, migrations_directory: &'a TempDir, schema: String) -> EvaluateDataLoss<'a> {
+        EvaluateDataLoss::new(&self.connector, migrations_directory, schema, &self.root.rt)
+    }
+
     /// Returns true only when testing on MSSQL.
     pub fn is_mssql(&self) -> bool {
         self.root.is_mssql()
+    }
+
+    /// Returns true only when testing on MariaDB.
+    pub fn is_mariadb(&self) -> bool {
+        self.root.is_mysql_mariadb()
     }
 
     /// Returns true only when testing on MySQL.
@@ -97,8 +128,29 @@ impl TestApi {
         }
     }
 
+    pub fn list_migration_directories<'a>(&'a self, migrations_directory: &'a TempDir) -> ListMigrationDirectories<'a> {
+        ListMigrationDirectories::new(&self.connector, migrations_directory, &self.root.rt)
+    }
+
     pub fn lower_cases_table_names(&self) -> bool {
         self.root.lower_cases_table_names()
+    }
+
+    pub fn mark_migration_applied<'a>(
+        &'a self,
+        migration_name: impl Into<String>,
+        migrations_directory: &'a TempDir,
+    ) -> MarkMigrationApplied<'a> {
+        MarkMigrationApplied::new(
+            &self.connector,
+            migration_name.into(),
+            migrations_directory,
+            &self.root.rt,
+        )
+    }
+
+    pub fn mark_migration_rolled_back(&self, migration_name: impl Into<String>) -> MarkMigrationRolledBack<'_> {
+        MarkMigrationRolledBack::new(&self.connector, migration_name.into(), &self.root.rt)
     }
 
     pub fn migration_persistence<'a>(&'a self) -> &(dyn MigrationPersistence + 'a) {
@@ -106,6 +158,7 @@ impl TestApi {
     }
 
     /// Assert facts about the database schema
+    #[track_caller]
     pub fn assert_schema(&self) -> SchemaAssertion {
         SchemaAssertion::new(
             self.root.block_on(self.connector.describe_schema()).unwrap(),
@@ -119,18 +172,32 @@ impl TestApi {
     }
 
     /// Render a valid datasource block, including database URL.
-    pub fn datasource_block(&self) -> String {
-        self.root.args.datasource_block(self.root.args.database_url())
+    pub fn datasource_block(&self) -> DatasourceBlock<'_> {
+        self.root.datasource_block()
     }
 
-    /// Same as quaint::Queryable::query()
+    pub fn datasource_block_with<'a>(&'a self, params: &'a [(&'a str, &'a str)]) -> DatasourceBlock<'a> {
+        self.root.args.datasource_block(self.root.connection_string(), params)
+    }
+
+    pub fn normalize_identifier<'a>(&self, identifier: &'a str) -> Cow<'a, str> {
+        if self.lower_cases_table_names() {
+            identifier.to_ascii_lowercase().into()
+        } else {
+            identifier.into()
+        }
+    }
+
+    /// Like quaint::Queryable::query()
+    #[track_caller]
     pub fn query(&self, q: quaint::ast::Query<'_>) -> ResultSet {
         self.root.block_on(self.connector.quaint().query(q)).unwrap()
     }
 
     /// Send a SQL command to the database, and expect it to succeed.
+    #[track_caller]
     pub fn raw_cmd(&self, sql: &str) {
-        self.root.raw_cmd(sql)
+        self.root.block_on(self.connector.quaint().raw_cmd(sql)).unwrap()
     }
 
     /// Render a table name with the required prefixing for use with quaint query building.
@@ -140,6 +207,11 @@ impl TestApi {
         } else {
             (self.connector.quaint().connection_info().schema_name(), table_name).into()
         }
+    }
+
+    /// Plan a `reset` command
+    pub fn reset(&self) -> Reset<'_> {
+        Reset::new_sync(&self.connector, &self.root.rt)
     }
 
     /// Plan a `schemaPush` command

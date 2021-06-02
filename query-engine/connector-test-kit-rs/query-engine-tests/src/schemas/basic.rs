@@ -81,6 +81,22 @@ pub fn common_text_and_numeric_types() -> String {
     schema.to_owned()
 }
 
+/// Test model containing all common Prisma numeric and string types, optional.
+pub fn common_text_and_numeric_types_optional() -> String {
+    let schema = indoc! {
+        "model TestModel {
+            #id(id, Int, @id)
+            int     Int?
+            bInt    BigInt?
+            float   Float?
+            decimal Decimal?
+            string  String?
+        }"
+    };
+
+    schema.to_owned()
+}
+
 /// Test model containing all possible Prisma scalar types.
 /// Excludes capability-dependent types (e.g. JSON).
 pub fn common_types() -> String {
@@ -121,12 +137,64 @@ pub fn common_list_types() -> String {
     schema.to_owned()
 }
 
-/// Basic Test model containing a single json field
+/// Basic Test model containing a single json field.
 pub fn json() -> String {
     let schema = indoc! {
         "model TestModel {
             #id(id, Int, @id)
             json Json
+        }"
+    };
+
+    schema.to_owned()
+}
+
+/// Basic Test model containing a single optional json field.
+pub fn json_opt() -> String {
+    let schema = indoc! {
+        "model TestModel {
+            #id(id, Int, @id)
+            json Json?
+        }"
+    };
+
+    schema.to_owned()
+}
+
+pub fn string_combination_unique() -> String {
+    let schema = indoc! {
+        r#"model TestModel {
+            #id(id, Int, @id)
+            fieldA String
+            fieldB String
+            fieldC String
+            fieldD String
+
+            @@unique([fieldA, fieldB, fieldC, fieldD])
+          }"#
+    };
+
+    schema.to_owned()
+}
+
+pub fn string_combination() -> String {
+    let schema = indoc! {
+        r#"model TestModel {
+            #id(id, Int, @id)
+            fieldA String
+            fieldB String
+            fieldC String
+            fieldD String
+          }"#
+    };
+
+    schema.to_owned()
+}
+
+pub fn autoinc_id() -> String {
+    let schema = indoc! {
+        "model TestModel {
+            #id(id, Int, @id, @default(autoincrement()))
         }"
     };
 

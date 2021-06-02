@@ -1,10 +1,8 @@
 use crate::common::*;
 use datamodel::{ast::Span, common::preview_features::*, diagnostics::DatamodelError, StringFromEnvVar};
 use pretty_assertions::assert_eq;
-use serial_test::serial;
 
 #[test]
-#[serial]
 fn must_error_if_multiple_datasources_are_defined() {
     let schema = r#"
 datasource db1 {
@@ -31,7 +29,6 @@ datasource db2 {
 }
 
 #[test]
-#[serial]
 fn must_forbid_env_functions_in_provider_field() {
     let schema = r#"
         datasource ds {
@@ -39,8 +36,6 @@ fn must_forbid_env_functions_in_provider_field() {
             url = env("DB_URL")
         }
     "#;
-    std::env::set_var("DB_PROVIDER", "postgresql");
-    std::env::set_var("DB_URL", "https://localhost");
     let config = datamodel::parse_configuration(schema);
     assert!(config.is_err());
     let diagnostics = config.err().expect("This must error");
@@ -51,7 +46,6 @@ fn must_forbid_env_functions_in_provider_field() {
 }
 
 #[test]
-#[serial]
 fn must_forbid_env_functions_in_provider_field_even_if_missing() {
     let schema = r#"
         datasource ds {
@@ -59,9 +53,7 @@ fn must_forbid_env_functions_in_provider_field_even_if_missing() {
             url = env("DB_URL")
         }
     "#;
-    std::env::set_var("DB_URL", "https://localhost");
     let config = datamodel::parse_configuration(schema);
-    assert!(config.is_err());
     let diagnostics = config.err().expect("This must error");
     diagnostics.assert_is(DatamodelError::new_functional_evaluation_error(
         "A datasource must not use the env() function in the provider argument.",
@@ -107,13 +99,12 @@ fn must_error_for_empty_provider_arrays() {
 }
 
 #[test]
-#[serial]
 fn must_error_for_empty_urls_derived_from_env_vars() {
-    std::env::set_var("DB_URL", "  ");
+    std::env::set_var("DB_URL_EMPTY_0001", "  ");
     let schema = r#"
         datasource myds {
             provider = "sqlite"
-            url = env("DB_URL")
+            url = env("DB_URL_EMPTY_0001")
         }
     "#;
 
@@ -121,9 +112,9 @@ fn must_error_for_empty_urls_derived_from_env_vars() {
     let diagnostics = config.subject.datasources[0].load_url().unwrap_err();
 
     diagnostics.assert_is(DatamodelError::new_source_validation_error(
-        "You must provide a nonempty URL. The environment variable `DB_URL` resolved to an empty string.",
+        "You must provide a nonempty URL. The environment variable `DB_URL_EMPTY_0001` resolved to an empty string.",
         "myds",
-        Span::new(77, 90),
+        Span::new(77, 101),
     ));
 }
 
@@ -167,15 +158,14 @@ fn must_error_if_wrong_protocol_is_used_for_mysql_shadow_database_url() {
 }
 
 #[test]
-#[serial]
 fn must_not_error_for_empty_shadow_database_urls_derived_from_env_vars() {
-    std::env::set_var("DB_URL", "  ");
+    std::env::set_var("EMPTY_SHADOW_DB URL_0129", "  ");
 
     let schema = r#"
         datasource myds {
             provider = "postgres"
             url = "postgres://"
-            shadowDatabaseUrl = env("DB_URL")
+            shadowDatabaseUrl = env("EMPTY_SHADOW_DB URL_0129")
         }
     "#;
 
@@ -290,12 +280,11 @@ fn new_lines_in_source_must_work() {
 }
 
 #[test]
-#[serial]
 fn must_error_if_env_var_is_missing() {
     let schema = r#"
         datasource ds {
           provider = "postgresql"
-          url = env("DATABASE_URL")
+          url = env("MISSING_DATABASE_URL_0001")
         }
     "#;
 
@@ -303,24 +292,24 @@ fn must_error_if_env_var_is_missing() {
     let diagnostics = config.subject.datasources[0].load_url().unwrap_err();
 
     diagnostics.assert_is(DatamodelError::new_environment_functional_evaluation_error(
-        "DATABASE_URL".into(),
-        Span::new(75, 94),
+        "MISSING_DATABASE_URL_0001".into(),
+        Span::new(75, 107),
     ));
 }
 
 #[test]
-#[serial]
 fn must_succeed_if_env_var_is_missing_but_override_was_provided() {
     let schema = r#"
         datasource ds {
           provider = "postgresql"
-          url = env("DATABASE_URL")
+          url = env("MISSING_DATABASE_URL_0002")
         }
     "#;
 
     let url = "postgres://localhost";
     let overrides = vec![("ds".to_string(), url.to_string())];
-    let config = parse_configuration_with_url_overrides(schema, overrides);
+    let mut config = parse_configuration(schema);
+    config.resolve_datasource_urls_from_env(&overrides).unwrap();
     let data_source = config.datasources.first().unwrap();
 
     data_source.assert_name("ds");
@@ -331,7 +320,6 @@ fn must_succeed_if_env_var_is_missing_but_override_was_provided() {
 }
 
 #[test]
-#[serial]
 fn must_succeed_if_env_var_exists_and_override_was_provided() {
     let schema = r#"
         datasource ds {
@@ -343,7 +331,8 @@ fn must_succeed_if_env_var_exists_and_override_was_provided() {
 
     let url = "postgres://hostbar";
     let overrides = vec![("ds".to_string(), url.to_string())];
-    let config = parse_configuration_with_url_overrides(schema, overrides);
+    let mut config = parse_configuration(schema);
+    config.resolve_datasource_urls_from_env(&overrides).unwrap();
     let data_source = config.datasources.first().unwrap();
 
     data_source.assert_name("ds");
@@ -354,7 +343,6 @@ fn must_succeed_if_env_var_exists_and_override_was_provided() {
 }
 
 #[test]
-#[serial]
 fn must_succeed_with_overrides() {
     let schema = r#"
         datasource ds {
@@ -364,8 +352,10 @@ fn must_succeed_with_overrides() {
     "#;
 
     let url = "postgres://hostbar";
-    let overrides = vec![("ds".to_string(), url.to_string())];
-    let config = parse_configuration_with_url_overrides(schema, overrides);
+    let overrides = &[("ds".to_string(), url.to_string())];
+    let mut config = parse_configuration(schema);
+    config.resolve_datasource_urls_from_env(overrides).unwrap();
+
     let data_source = config.datasources.first().unwrap();
 
     data_source.assert_name("ds");
@@ -373,7 +363,6 @@ fn must_succeed_with_overrides() {
 }
 
 #[test]
-#[serial]
 fn fail_to_load_sources_for_invalid_source() {
     let invalid_datamodel: &str = r#"
         datasource pg1 {
@@ -409,7 +398,6 @@ fn fail_when_preview_features_are_declared() {
 }
 
 #[test]
-#[serial]
 fn fail_when_no_source_is_declared() {
     let invalid_datamodel: &str = r#"        "#;
     let res = parse_configuration(invalid_datamodel);
@@ -445,29 +433,67 @@ fn microsoft_sql_server_preview_feature_must_work() {
     assert!(generator.preview_features.contains(&PreviewFeature::MicrosoftSqlServer));
 }
 
+#[test]
+fn planet_scale_mode_without_preview_feature_errors() {
+    let schema_1 = r#"
+    datasource ps {
+        provider = "mysql"
+        planetScaleMode = true
+        url = "mysql://root:prisma@localhost:3306/mydb"
+    }
+    "#;
+
+    let schema_2 = r#"
+    datasource ps {
+        provider = "sqlserver"
+        planetScaleMode = true
+        url = "mysql://root:prisma@localhost:3306/mydb"
+    }
+
+    generator client {
+        provider = "prisma-client-js"
+    }
+    "#;
+
+    for schema in &[schema_1, schema_2] {
+        let err = parse_error(schema);
+
+        assert!(
+            err.errors
+                .first()
+                .unwrap()
+                .to_string()
+                .starts_with("Error validating datasource `ps`: \nThe `planetScaleMode` option can only be set if the preview feature is enabled"),
+            "{}",
+            err.errors.first().unwrap()
+        );
+    }
+}
+
+#[test]
+fn planet_scale_mode_with_preview_feature_works() {
+    let schema = r#"
+    datasource ps {
+        provider = "sqlserver"
+        planetScaleMode = true
+        url = "mysql://root:prisma@localhost:3306/mydb"
+    }
+
+    generator client {
+        provider = "prisma-client-js"
+        previewFeatures = ["planetScaleMode"]
+    }
+    "#;
+
+    let config = parse_configuration(schema);
+
+    assert!(config.datasources[0].planet_scale_mode);
+    assert!(config.planet_scale_mode());
+}
+
 fn assert_eq_json(a: &str, b: &str) {
     let json_a: serde_json::Value = serde_json::from_str(a).expect("The String a was not valid JSON.");
     let json_b: serde_json::Value = serde_json::from_str(b).expect("The String b was not valid JSON.");
 
     assert_eq!(json_a, json_b);
 }
-
-// Temporarily disabled because of processing/hacks on URLs that make comparing the two URLs unreliable.
-// #[test]
-// fn must_error_when_both_url_and_shadow_database_url_are_the_same() {
-//     let schema = r#"
-//         datasource redmond {
-//             provider = "postgres"
-//             url = "postgresql://abcd"
-//             shadowDatabaseUrl = "postgresql://abcd"
-//         }
-//     "#;
-
-//     let config = datamodel::parse_configuration(schema);
-//     assert!(config.is_err());
-//     let diagnostics = config.err().expect("This must error");
-//     diagnostics.assert_is(DatamodelError::new_shadow_database_is_same_as_main_url_error(
-//         "redmond".into(),
-//         Span::new(134, 153),
-//     ));
-// }

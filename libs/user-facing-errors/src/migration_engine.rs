@@ -172,7 +172,7 @@ impl crate::UserFacingError for ShadowDbCreationError {
         };
 
         format!(
-            "Prisma Migrate could not create the shadow database. Please make sure the database user has permission to create databases. More info: https://pris.ly/d/migrate-shadow. Original error: {error_code}\n{inner_error}",
+            "Prisma Migrate could not create the shadow database. Please make sure the database user has permission to create databases. Read more at https://pris.ly/d/migrate-shadow\n\nOriginal error: {error_code}\n{inner_error}",
             inner_error = self.inner_error.message(),
             error_code = error_code
         )
@@ -247,6 +247,13 @@ pub struct ProviderSwitchedError {
     /// The provider from migrate.lock
     pub expected_provider: String,
 }
+
+#[derive(Debug, Serialize, UserFacingError)]
+#[user_facing(
+    code = "P3020",
+    message = "The automatic creation of shadow databases is disabled on Azure SQL. Please set up a shadow database using the `shadowDatabaseUrl` datasource attribute.\nRead the docs page for more details: https://pris.ly/d/migrate-shadow"
+)]
+pub struct AzureMssqlShadowDb;
 
 #[cfg(test)]
 mod tests {
