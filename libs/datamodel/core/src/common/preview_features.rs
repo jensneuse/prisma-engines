@@ -1,10 +1,11 @@
-use lazy_static::lazy_static;
-use paste::paste;
+use once_cell::sync::Lazy;
 use serde::{Serialize, Serializer};
 use PreviewFeature::*;
 
 macro_rules! features {
     ($( $variant:ident $(,)? ),*) => {
+        #[enumflags2::bitflags]
+        #[repr(u32)]
         #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
         pub enum PreviewFeature {
             $(
@@ -14,16 +15,11 @@ macro_rules! features {
 
         impl PreviewFeature {
             pub fn parse_opt(s: &str) -> Option<Self> {
-                paste! {
-                    let parsed = match s.to_lowercase().as_str() {
-                        $(
-                            stringify!([<$variant:lower>]) => Self::$variant,
-                        )*
-                        _ => return None,
-                    };
-                }
+                $(
+                    if s.eq_ignore_ascii_case(stringify!($variant)) { return Some(Self::$variant) }
+                )*
 
-                Some(parsed)
+                None
             }
         }
 
@@ -59,14 +55,16 @@ features!(
     OrderByAggregateGroup,
     FilterJson,
     PlanetScaleMode,
+    ReferentialActions,
 );
 
 // Mapping of which active, deprecated and hidden
 // features are valid in which place in the datamodel.
-lazy_static! {
-    /// Generator preview features
-    pub static ref GENERATOR: FeatureMap = {
-        FeatureMap::default().with_active(vec![
+
+/// Generator preview features
+pub static GENERATOR: Lazy<FeatureMap> = Lazy::new(|| {
+    FeatureMap::default()
+        .with_active(vec![
             MicrosoftSqlServer,
             OrderByRelation,
             NApi,
@@ -74,9 +72,10 @@ lazy_static! {
             OrderByAggregateGroup,
             FilterJson,
             PlanetScaleMode,
-        ]).with_hidden(vec![
-            MongoDb
-        ]).with_deprecated(vec![
+            ReferentialActions,
+            MongoDb,
+        ])
+        .with_deprecated(vec![
             AtomicNumberOperations,
             AggregateApi,
             Middlewares,
@@ -86,15 +85,12 @@ lazy_static! {
             TransactionApi,
             UncheckedScalarInputs,
             GroupBy,
-            CreateMany
+            CreateMany,
         ])
-    };
+});
 
-    /// Datasource preview features.
-    pub static ref DATASOURCE: FeatureMap = {
-        FeatureMap::default()
-    };
-}
+/// Datasource preview features.
+pub static DATASOURCE: Lazy<FeatureMap> = Lazy::new(FeatureMap::default);
 
 #[derive(Debug, Default)]
 pub struct FeatureMap {
@@ -123,6 +119,7 @@ impl FeatureMap {
         self
     }
 
+    #[allow(dead_code)]
     fn with_hidden(mut self, hidden: Vec<PreviewFeature>) -> Self {
         self.hidden = hidden;
         self
@@ -155,5 +152,5 @@ impl Serialize for PreviewFeature {
 /// Assumes 1-byte characters!
 pub fn decapitalize(s: &str) -> String {
     let first_char = s.chars().next().unwrap();
-    format!("{}{}", first_char.to_lowercase(), s[1..].to_owned())
+    format!("{}{}", first_char.to_lowercase(), &s[1..])
 }

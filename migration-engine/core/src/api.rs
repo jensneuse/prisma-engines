@@ -1,12 +1,8 @@
 //! The external facing programmatic API to the migration engine.
 
-mod error_rendering;
-mod rpc;
-
-pub use rpc::RpcApi;
-
 use crate::{commands::*, CoreResult};
-use migration_connector::MigrationConnector;
+use migration_connector::{migrations_directory, MigrationConnector};
+use std::path::Path;
 use tracing_futures::Instrument;
 
 /// The programmatic, generic, fantastic migration engine API.
@@ -53,7 +49,7 @@ pub trait GenericApi: Send + Sync + 'static {
     ) -> CoreResult<MarkMigrationRolledBackOutput>;
 
     /// Prepare to create a migration.
-    async fn plan_migration(&self, input: &PlanMigrationInput) -> CoreResult<PlanMigrationOutput>;
+    async fn plan_migration(&self) -> CoreResult<()>;
 
     /// Reset a database to an empty state (no data, no schema).
     async fn reset(&self) -> CoreResult<()>;
@@ -69,13 +65,13 @@ impl<C: MigrationConnector> GenericApi for C {
     }
 
     async fn apply_migrations(&self, input: &ApplyMigrationsInput) -> CoreResult<ApplyMigrationsOutput> {
-        ApplyMigrationsCommand::execute(input, self)
+        apply_migrations(input, self)
             .instrument(tracing::info_span!("ApplyMigrations"))
             .await
     }
 
     async fn create_migration(&self, input: &CreateMigrationInput) -> CoreResult<CreateMigrationOutput> {
-        CreateMigrationCommand::execute(input, self)
+        create_migration(input, self)
             .instrument(tracing::info_span!(
                 "CreateMigration",
                 migration_name = input.migration_name.as_str(),
@@ -85,13 +81,11 @@ impl<C: MigrationConnector> GenericApi for C {
     }
 
     async fn debug_panic(&self) -> CoreResult<()> {
-        DebugPanicCommand::execute(&(), self)
-            .instrument(tracing::info_span!("DebugPanic"))
-            .await
+        panic!("This is the debugPanic artificial panic")
     }
 
     async fn dev_diagnostic(&self, input: &DevDiagnosticInput) -> CoreResult<DevDiagnosticOutput> {
-        DevDiagnosticCommand::execute(input, self)
+        dev_diagnostic(input, self)
             .instrument(tracing::info_span!("DevDiagnostic"))
             .await
     }
@@ -100,13 +94,13 @@ impl<C: MigrationConnector> GenericApi for C {
         &self,
         input: &DiagnoseMigrationHistoryInput,
     ) -> CoreResult<DiagnoseMigrationHistoryOutput> {
-        DiagnoseMigrationHistoryCommand::execute(input, self)
+        diagnose_migration_history(input, self)
             .instrument(tracing::info_span!("DiagnoseMigrationHistory"))
             .await
     }
 
     async fn evaluate_data_loss(&self, input: &EvaluateDataLossInput) -> CoreResult<EvaluateDataLossOutput> {
-        EvaluateDataLoss::execute(input, self)
+        evaluate_data_loss(input, self)
             .instrument(tracing::info_span!("EvaluateDataLoss"))
             .await
     }
@@ -115,16 +109,22 @@ impl<C: MigrationConnector> GenericApi for C {
         &self,
         input: &ListMigrationDirectoriesInput,
     ) -> CoreResult<ListMigrationDirectoriesOutput> {
-        ListMigrationDirectoriesCommand::execute(input, self)
-            .instrument(tracing::info_span!("ListMigrationDirectories"))
-            .await
+        let migrations_from_filesystem =
+            migrations_directory::list_migrations(Path::new(&input.migrations_directory_path))?;
+
+        let migrations = migrations_from_filesystem
+            .iter()
+            .map(|migration| migration.migration_name().to_string())
+            .collect();
+
+        Ok(ListMigrationDirectoriesOutput { migrations })
     }
 
     async fn mark_migration_applied(
         &self,
         input: &MarkMigrationAppliedInput,
     ) -> CoreResult<MarkMigrationAppliedOutput> {
-        MarkMigrationAppliedCommand::execute(input, self)
+        mark_migration_applied(input, self)
             .instrument(tracing::info_span!(
                 "MarkMigrationApplied",
                 migration_name = input.migration_name.as_str()
@@ -144,10 +144,8 @@ impl<C: MigrationConnector> GenericApi for C {
             .await
     }
 
-    async fn plan_migration(&self, input: &PlanMigrationInput) -> CoreResult<PlanMigrationOutput> {
-        PlanMigrationCommand::execute(input, self)
-            .instrument(tracing::info_span!("PlanMigration"))
-            .await
+    async fn plan_migration(&self) -> CoreResult<()> {
+        unreachable!("PlanMigration command")
     }
 
     async fn reset(&self) -> CoreResult<()> {
@@ -159,7 +157,7 @@ impl<C: MigrationConnector> GenericApi for C {
     }
 
     async fn schema_push(&self, input: &SchemaPushInput) -> CoreResult<SchemaPushOutput> {
-        SchemaPushCommand::execute(input, self)
+        schema_push(input, self)
             .instrument(tracing::info_span!("SchemaPush"))
             .await
     }

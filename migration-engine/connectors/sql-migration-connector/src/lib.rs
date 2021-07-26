@@ -7,7 +7,6 @@ mod connection_wrapper;
 mod error;
 mod flavour;
 mod pair;
-mod sql_database_migration_inferrer;
 mod sql_database_step_applier;
 mod sql_destructive_change_checker;
 mod sql_migration;
@@ -16,16 +15,22 @@ mod sql_renderer;
 mod sql_schema_calculator;
 mod sql_schema_differ;
 
+use std::env;
+
 use connection_wrapper::Connection;
-use datamodel::Datamodel;
+use datamodel::{common::preview_features::PreviewFeature, walkers::walk_models, Configuration, Datamodel};
+use enumflags2::BitFlags;
 use error::quaint_error_to_connector_error;
 use flavour::SqlFlavour;
-use migration_connector::*;
+use migration_connector::{migrations_directory::MigrationDirectory, *};
 use pair::Pair;
-use quaint::{prelude::ConnectionInfo, single::Quaint};
+use quaint::{
+    prelude::{ConnectionInfo, Queryable},
+    single::Quaint,
+};
 use sql_migration::{DropUserDefinedType, DropView, SqlMigration, SqlMigrationStep};
-use sql_schema_describer::{walkers::SqlSchemaExt, SqlSchema};
-use user_facing_errors::{common::InvalidDatabaseString, KnownError};
+use sql_schema_describer::{walkers::SqlSchemaExt, ColumnId, SqlSchema, TableId};
+use user_facing_errors::{common::InvalidConnectionString, KnownError};
 
 /// The top-level SQL migration connector.
 pub struct SqlMigrationConnector {
@@ -38,10 +43,11 @@ impl SqlMigrationConnector {
     /// Construct and initialize the SQL migration connector.
     pub async fn new(
         connection_string: &str,
+        preview_features: BitFlags<PreviewFeature>,
         shadow_database_connection_string: Option<String>,
     ) -> ConnectorResult<Self> {
         let connection = connect(connection_string).await?;
-        let flavour = flavour::from_connection_info(connection.connection_info());
+        let flavour = flavour::from_connection_info(&connection.connection_info(), preview_features);
 
         flavour.ensure_connection_validity(&connection).await?;
 
@@ -55,14 +61,14 @@ impl SqlMigrationConnector {
     /// Create the database corresponding to the connection string, without initializing the connector.
     pub async fn create_database(database_str: &str) -> ConnectorResult<String> {
         let connection_info = ConnectionInfo::from_url(database_str).map_err(ConnectorError::url_parse_error)?;
-        let flavour = flavour::from_connection_info(&connection_info);
+        let flavour = flavour::from_connection_info(&connection_info, BitFlags::empty());
         flavour.create_database(database_str).await
     }
 
     /// Drop the database corresponding to the connection string, without initializing the connector.
     pub async fn drop_database(database_str: &str) -> ConnectorResult<()> {
         let connection_info = ConnectionInfo::from_url(database_str).map_err(ConnectorError::url_parse_error)?;
-        let flavour = flavour::from_connection_info(&connection_info);
+        let flavour = flavour::from_connection_info(&connection_info, BitFlags::empty());
 
         flavour.drop_database(database_str).await
     }
@@ -71,7 +77,7 @@ impl SqlMigrationConnector {
     pub async fn qe_setup(database_str: &str) -> ConnectorResult<()> {
         let connection_info = ConnectionInfo::from_url(database_str).map_err(ConnectorError::url_parse_error)?;
 
-        let flavour = flavour::from_connection_info(&connection_info);
+        let flavour = flavour::from_connection_info(&connection_info, BitFlags::empty());
 
         flavour.qe_setup(database_str).await
     }
@@ -85,8 +91,18 @@ impl SqlMigrationConnector {
     }
 
     /// Made public for tests.
-    pub fn quaint(&self) -> &Quaint {
-        self.connection.quaint()
+    pub fn queryable(&self) -> &dyn Queryable {
+        self.connection.queryable()
+    }
+
+    /// Made public for tests.
+    pub fn connection_info(&self) -> ConnectionInfo {
+        self.connection.connection_info()
+    }
+
+    /// Made public for tests.
+    pub fn schema_name(&self) -> &str {
+        self.connection.schema_name()
     }
 
     /// Made public for tests.
@@ -108,13 +124,13 @@ impl SqlMigrationConnector {
 
         let source_schema = self.flavour.describe_schema(connection).await?;
         let target_schema = SqlSchema::empty();
-
         let mut steps = Vec::new();
 
         // We drop views here, not in the normal migration process to not
         // accidentally drop something we can't describe in the data model.
         let drop_views = source_schema
             .view_walkers()
+            .filter(|view| !self.flavour.view_should_be_ignored(view.name()))
             .map(|vw| vw.view_index())
             .map(DropView::new)
             .map(SqlMigrationStep::DropView);
@@ -145,11 +161,36 @@ impl SqlMigrationConnector {
             self.flavour.drop_migrations_table(connection).await?;
         }
 
-        for step in self.render_steps_pretty(&migration)? {
-            connection.raw_cmd(&step.raw).await?;
+        if migration.steps.is_empty() {
+            return Ok(());
         }
 
+        let migration = self.render_script(&Migration::new(migration), &DestructiveChangeDiagnostics::default());
+        connection.raw_cmd(&migration).await?;
+
         Ok(())
+    }
+
+    /// For tests.
+    pub fn migration_from_schemas(
+        from: (&Configuration, &Datamodel),
+        to: (&Configuration, &Datamodel),
+    ) -> SqlMigration {
+        let connection_info =
+            ConnectionInfo::from_url(&from.0.datasources[0].load_url(|key| env::var(key).ok()).unwrap()).unwrap();
+
+        let flavour = flavour::from_connection_info(&connection_info, BitFlags::empty());
+        let from_sql = sql_schema_calculator::calculate_sql_schema(from, flavour.as_ref());
+        let to_sql = sql_schema_calculator::calculate_sql_schema(to, flavour.as_ref());
+
+        let steps = sql_schema_differ::calculate_steps(Pair::new(&from_sql, &to_sql), flavour.as_ref());
+
+        SqlMigration {
+            before: from_sql,
+            after: to_sql,
+            added_columns_with_virtual_defaults: Vec::new(),
+            steps,
+        }
     }
 
     /// Generate a name for a temporary (shadow) database, _if_ there is no user-configured shadow database url.
@@ -160,12 +201,26 @@ impl SqlMigrationConnector {
 
         Some(format!("prisma_migrate_shadow_db_{}", uuid::Uuid::new_v4()))
     }
+
+    async fn sql_schema_from_diff_target(&self, target: &DiffTarget<'_>) -> ConnectorResult<SqlSchema> {
+        match target {
+            DiffTarget::Datamodel(schema) => Ok(sql_schema_calculator::calculate_sql_schema(
+                (schema.0, schema.1),
+                self.flavour.as_ref(),
+            )),
+            DiffTarget::Migrations(migrations) => {
+                self.flavour()
+                    .sql_schema_from_migration_history(migrations, &self.connection, self)
+                    .await
+            }
+            DiffTarget::Database => self.describe_schema().await,
+            DiffTarget::Empty => Ok(SqlSchema::empty()),
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl MigrationConnector for SqlMigrationConnector {
-    type DatabaseMigration = SqlMigration;
-
     fn connector_type(&self) -> &'static str {
         self.connection.connection_info().sql_family().as_str()
     }
@@ -182,8 +237,54 @@ impl MigrationConnector for SqlMigrationConnector {
             .unwrap_or_else(|| "Database version information not available.".into()))
     }
 
-    async fn create_database(database_str: &str) -> ConnectorResult<String> {
-        Self::create_database(database_str).await
+    async fn diff(&self, from: DiffTarget<'_>, to: DiffTarget<'_>) -> ConnectorResult<Migration> {
+        let previous_schema = self.sql_schema_from_diff_target(&from).await?;
+        let next_schema = self.sql_schema_from_diff_target(&to).await?;
+
+        let steps =
+            sql_schema_differ::calculate_steps(Pair::new(&previous_schema, &next_schema), self.flavour.as_ref());
+
+        let added_columns_with_virtual_defaults: Vec<(TableId, ColumnId)> =
+            if let Some((_, next_datamodel)) = to.as_datamodel() {
+                walk_added_columns(&steps)
+                    .map(|(table_index, column_index)| {
+                        let table = next_schema.table_walker_at(table_index);
+                        let column = table.column_at(column_index);
+
+                        (table, column)
+                    })
+                    .filter(|(table, column)| {
+                        walk_models(next_datamodel)
+                            .find(|model| model.database_name() == table.name())
+                            .and_then(|model| model.find_scalar_field(column.name()))
+                            .filter(|field| {
+                                field
+                                    .default_value()
+                                    .map(|default| default.is_uuid() || default.is_cuid())
+                                    .unwrap_or(false)
+                            })
+                            .is_some()
+                    })
+                    .map(move |(table, column)| (table.table_id(), column.column_id()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        Ok(Migration::new(SqlMigration {
+            before: previous_schema,
+            after: next_schema,
+            added_columns_with_virtual_defaults,
+            steps,
+        }))
+    }
+
+    fn migration_file_extension(&self) -> &'static str {
+        "sql"
+    }
+
+    fn migration_len(&self, migration: &Migration) -> usize {
+        migration.downcast_ref::<SqlMigration>().steps.len()
     }
 
     async fn reset(&self) -> ConnectorResult<()> {
@@ -192,6 +293,10 @@ impl MigrationConnector for SqlMigrationConnector {
         }
 
         Ok(())
+    }
+
+    fn migration_summary(&self, migration: &Migration) -> String {
+        migration.downcast_ref::<SqlMigration>().drift_summary()
     }
 
     /// Optionally check that the features implied by the provided datamodel are all compatible with
@@ -203,32 +308,81 @@ impl MigrationConnector for SqlMigrationConnector {
         self.flavour.check_database_version_compatibility(datamodel)
     }
 
-    fn database_migration_inferrer(&self) -> &dyn DatabaseMigrationInferrer<SqlMigration> {
+    fn database_migration_step_applier(&self) -> &dyn DatabaseMigrationStepApplier {
         self
     }
 
-    fn database_migration_step_applier(&self) -> &dyn DatabaseMigrationStepApplier<SqlMigration> {
-        self
-    }
-
-    fn destructive_change_checker(&self) -> &dyn DestructiveChangeChecker<SqlMigration> {
+    fn destructive_change_checker(&self) -> &dyn DestructiveChangeChecker {
         self
     }
 
     fn migration_persistence(&self) -> &dyn MigrationPersistence {
         self
     }
+
+    #[tracing::instrument(skip(self, migrations))]
+    async fn validate_migrations(&self, migrations: &[MigrationDirectory]) -> ConnectorResult<()> {
+        self.flavour()
+            .sql_schema_from_migration_history(migrations, self.conn(), self)
+            .await?;
+
+        Ok(())
+    }
 }
 
-async fn connect(database_str: &str) -> ConnectorResult<Connection> {
-    let connection_info = ConnectionInfo::from_url(database_str).map_err(|err| {
-        let details = user_facing_errors::quaint::invalid_url_description(&err.to_string());
-        KnownError::new(InvalidDatabaseString { details })
+async fn connect(connection_string: &str) -> ConnectorResult<Connection> {
+    let connection_info = ConnectionInfo::from_url(connection_string).map_err(|err| {
+        let details = user_facing_errors::quaint::invalid_connection_string_description(&err.to_string());
+        KnownError::new(InvalidConnectionString { details })
     })?;
 
-    let connection = Quaint::new(database_str)
+    if let ConnectionInfo::Postgres(url) = &connection_info {
+        return quaint::connector::PostgreSql::new(url.clone())
+            .await
+            .map(|conn| Connection::new_postgres(conn, url.clone()))
+            .map_err(|err| quaint_error_to_connector_error(err, &connection_info));
+    }
+
+    if let ConnectionInfo::Mysql(url) = &connection_info {
+        return quaint::connector::Mysql::new(url.clone())
+            .await
+            .map(|conn| Connection::new_mysql(conn, url.clone()))
+            .map_err(|err| quaint_error_to_connector_error(err, &connection_info));
+    }
+
+    let connection = Quaint::new(connection_string)
         .await
         .map_err(|err| quaint_error_to_connector_error(err, &connection_info))?;
 
-    Ok(Connection::new(connection))
+    Ok(Connection::new_generic(connection))
+}
+
+/// List all the columns added in the migration, either by alter table steps or
+/// redefine table steps.
+///
+/// The return value should be interpreted as an iterator over `(table_index,
+/// column_index)` in the `next` schema.
+fn walk_added_columns(steps: &[SqlMigrationStep]) -> impl Iterator<Item = (TableId, ColumnId)> + '_ {
+    steps
+        .iter()
+        .filter_map(|step| step.as_alter_table())
+        .flat_map(move |alter_table| {
+            alter_table
+                .changes
+                .iter()
+                .filter_map(|change| change.as_add_column())
+                .map(move |column_index| -> (TableId, ColumnId) { (*alter_table.table_ids.next(), column_index) })
+        })
+        .chain(
+            steps
+                .iter()
+                .filter_map(|step| step.as_redefine_tables())
+                .flatten()
+                .flat_map(move |table| {
+                    table
+                        .added_columns
+                        .iter()
+                        .map(move |column_index| (*table.table_ids.next(), *column_index))
+                }),
+        )
 }

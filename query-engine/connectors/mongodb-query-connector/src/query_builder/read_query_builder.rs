@@ -11,23 +11,28 @@ use itertools::Itertools;
 use mongodb::{
     bson::{doc, Bson, Document},
     options::{AggregateOptions, FindOptions},
-    Collection,
+    ClientSession, Collection,
 };
 use prisma_models::{ModelProjection, ModelRef, ScalarFieldRef};
 
 /// Ergonomics wrapper for query execution and logging.
 /// Todo: Add all other queries gradually.
+#[allow(dead_code)]
 pub enum MongoReadQuery {
     Find(FindQuery),
     Pipeline(PipelineQuery),
 }
 
 impl MongoReadQuery {
-    pub async fn execute(self, on_collection: Collection) -> crate::Result<Vec<Document>> {
+    pub async fn execute(
+        self,
+        on_collection: Collection,
+        with_session: &mut ClientSession,
+    ) -> crate::Result<Vec<Document>> {
         log_query(on_collection.name(), &self);
         match self {
-            MongoReadQuery::Find(q) => q.execute(on_collection).await,
-            MongoReadQuery::Pipeline(q) => q.execute(on_collection).await,
+            MongoReadQuery::Find(q) => q.execute(on_collection, with_session).await,
+            MongoReadQuery::Pipeline(q) => q.execute(on_collection, with_session).await,
         }
     }
 }
@@ -37,11 +42,17 @@ pub struct PipelineQuery {
 }
 
 impl PipelineQuery {
-    pub async fn execute(self, on_collection: Collection) -> crate::Result<Vec<Document>> {
+    pub async fn execute(
+        self,
+        on_collection: Collection,
+        with_session: &mut ClientSession,
+    ) -> crate::Result<Vec<Document>> {
         let opts = AggregateOptions::builder().allow_disk_use(true).build();
-        let cursor = on_collection.aggregate(self.stages, opts).await?;
+        let cursor = on_collection
+            .aggregate_with_session(self.stages, opts, with_session)
+            .await?;
 
-        Ok(vacuum_cursor(cursor).await?)
+        Ok(vacuum_cursor(cursor, with_session).await?)
     }
 }
 
@@ -51,10 +62,16 @@ pub struct FindQuery {
 }
 
 impl FindQuery {
-    pub async fn execute(self, on_collection: Collection) -> crate::Result<Vec<Document>> {
-        let cursor = on_collection.find(self.filter, self.options).await?;
+    pub async fn execute(
+        self,
+        on_collection: Collection,
+        with_session: &mut ClientSession,
+    ) -> crate::Result<Vec<Document>> {
+        let cursor = on_collection
+            .find_with_session(self.filter, self.options, with_session)
+            .await?;
 
-        Ok(vacuum_cursor(cursor).await?)
+        Ok(vacuum_cursor(cursor, with_session).await?)
     }
 }
 
@@ -97,7 +114,7 @@ pub(crate) struct MongoReadQueryBuilder {
     pub(crate) cursor_data: Option<CursorData>,
 
     /// Skip a number of documents at the start of the result.
-    pub(crate) skip: Option<i64>,
+    pub(crate) skip: Option<u64>,
 
     /// Take only a certain number of documents from the result.
     pub(crate) limit: Option<i64>,
@@ -165,7 +182,7 @@ impl MongoReadQueryBuilder {
             joins,
             order_builder,
             cursor_builder,
-            skip: skip(args.skip, args.ignore_skip),
+            skip: skip(args.skip.map(|i| i as u64), args.ignore_skip),
             limit: take(args.take, args.ignore_take),
             aggregations: vec![],
             aggregation_filters: vec![],
@@ -183,31 +200,35 @@ impl MongoReadQueryBuilder {
 
         // Depending on the builder contents, either an
         // aggregation pipeline or a plain query is build.
-        if self.joins.is_empty()
-            && self.order_joins.is_empty()
-            && self.aggregations.is_empty()
-            && self.cursor_data.is_none()
-        {
-            Ok(self.build_find_query())
-        } else {
-            Ok(self.build_pipeline_query())
-        }
+        // if self.joins.is_empty()
+        //     && self.order_joins.is_empty()
+        //     && self.aggregations.is_empty()
+        //     && self.cursor_data.is_none()
+        // {
+        //     Ok(self.build_find_query())
+        // } else {
+        // }
+
+        Ok(self.build_pipeline_query())
     }
 
-    // Todo: Find out if always using aggregation pipeline is a good idea.
+    /// Note: Mongo Driver broke usage of the simple API, can't be used by us anymore. Always doing aggr. pipeline for now.
     /// Simplest form of find-documents query: `coll.find(filter, opts)`.
+    #[allow(dead_code)]
     fn build_find_query(self) -> MongoReadQuery {
-        let options = FindOptions::builder()
-            .projection(self.projection)
-            .limit(self.limit)
-            .skip(self.skip)
-            .sort(self.order)
-            .build();
+        // let options = FindOptions::builder()
+        //     .projection(self.projection)
+        //     .limit(self.limit)
+        //     .skip(self.skip)
+        //     .sort(self.order)
+        //     .build();
 
-        MongoReadQuery::Find(FindQuery {
-            filter: self.query,
-            options,
-        })
+        // MongoReadQuery::Find(FindQuery {
+        //     filter: self.query,
+        //     options,
+        // })
+
+        unreachable!()
     }
 
     /// Aggregation-pipeline based query. A distinction must be made between cursored and uncursored queries,
@@ -538,7 +559,7 @@ fn aggregation_pairs(op: &str, fields: &[ScalarFieldRef]) -> Vec<(String, Bson)>
         .collect()
 }
 
-fn skip(skip: Option<i64>, ignore: bool) -> Option<i64> {
+fn skip(skip: Option<u64>, ignore: bool) -> Option<u64> {
     if ignore {
         None
     } else {

@@ -1,5 +1,4 @@
-use crate::ConnectorResult;
-use serde::{Deserialize, Serialize};
+use crate::{ConnectorResult, Migration};
 
 /// Implementors of this trait are responsible for checking whether a migration
 /// could lead to data loss, or if it would be potentially unexecutable.
@@ -8,16 +7,13 @@ use serde::{Deserialize, Serialize};
 /// [DatabaseMigration](trait.MigrationConnector.html#associatedtype.DatabaseMigration)
 /// type.
 #[async_trait::async_trait]
-pub trait DestructiveChangeChecker<T>: Send + Sync
-where
-    T: Send + Sync + 'static,
-{
+pub trait DestructiveChangeChecker: Send + Sync {
     /// Check destructive changes resulting of applying the provided migration.
-    async fn check(&self, database_migration: &T) -> ConnectorResult<DestructiveChangeDiagnostics>;
+    async fn check(&self, migration: &Migration) -> ConnectorResult<DestructiveChangeDiagnostics>;
 
-    /// Check the database migration for destructive or unexecutable steps
+    /// Check the migration for destructive or unexecutable steps
     /// without performing any IO.
-    fn pure_check(&self, database_migration: &T) -> DestructiveChangeDiagnostics;
+    fn pure_check(&self, migration: &Migration) -> DestructiveChangeDiagnostics;
 }
 
 /// The errors and warnings emitted by the [DestructiveChangeChecker](trait.DestructiveChangeChecker.html).
@@ -35,13 +31,6 @@ impl DestructiveChangeDiagnostics {
         Default::default()
     }
 
-    /// Add a warning to the diagnostics.
-    pub fn add_warning<T: Into<Option<MigrationWarning>>>(&mut self, warning: T) {
-        if let Some(warning) = warning.into() {
-            self.warnings.push(warning)
-        }
-    }
-
     /// Is there any warning to be rendered?
     pub fn has_warnings(&self) -> bool {
         !self.warnings.is_empty()
@@ -50,7 +39,7 @@ impl DestructiveChangeDiagnostics {
 
 /// A warning emitted by [DestructiveChangeChecker](trait.DestructiveChangeChecker.html). Warnings will
 /// prevent a migration from being applied, unless the `force` flag is passed.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Debug)]
 pub struct MigrationWarning {
     /// The user-facing warning description.
     pub description: String,
@@ -59,7 +48,7 @@ pub struct MigrationWarning {
 }
 
 /// An unexecutable migration step detected by the DestructiveChangeChecker.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug)]
 pub struct UnexecutableMigration {
     /// The user-facing problem description.
     pub description: String,

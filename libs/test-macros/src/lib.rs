@@ -3,7 +3,7 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, TokenTree};
 use quote::quote;
-use syn::{parse_macro_input, AttributeArgs, Meta, MetaList, NestedMeta, Signature};
+use syn::{parse_macro_input, AttributeArgs, Lit, LitStr, Meta, MetaList, MetaNameValue, NestedMeta, Signature};
 
 #[proc_macro_attribute]
 pub fn test_connector(attr: TokenStream, input: TokenStream) -> TokenStream {
@@ -20,6 +20,11 @@ pub fn test_connector(attr: TokenStream, input: TokenStream) -> TokenStream {
                     return err.to_compile_error().into();
                 }
             }
+            NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+                lit: Lit::Str(litstr),
+                eq_token: _,
+                path,
+            })) if path.is_ident("ignore") => attrs.ignore_reason = Some(litstr),
             other => {
                 return syn::Error::new_spanned(other, "Unexpected argument")
                     .into_compile_error()
@@ -28,9 +33,9 @@ pub fn test_connector(attr: TokenStream, input: TokenStream) -> TokenStream {
         }
     }
 
-    // Then the function body
+    // Then the function item
     // We take advantage of the function body being the last token tree (surrounded by braces).
-    let (sig, body): (syn::Signature, proc_macro2::TokenStream) = {
+    let (sig, body): (Signature, proc_macro2::TokenStream) = {
         let sig_tokens = input
             .clone()
             .into_iter()
@@ -49,12 +54,15 @@ pub fn test_connector(attr: TokenStream, input: TokenStream) -> TokenStream {
     let include_tagged = &attrs.include_tagged;
     let exclude_tagged = &attrs.exclude_tagged;
     let capabilities = &attrs.capabilities;
+    let preview_features = &attrs.preview_features;
+
     let test_function_name = &sig.ident;
     let test_function_name_lit = sig.ident.to_string();
     let (arg_name, arg_type) = match extract_api_arg(&sig) {
         Ok(args) => args,
         Err(err) => return err.to_compile_error().into(),
     };
+    let ignore_attr = attrs.ignore_reason.map(|reason| quote!(#[ignore = #reason]));
 
     let tokens = if sig.asyncness.is_some() {
         let (return_ty, unwrap) = match sig.output {
@@ -64,8 +72,9 @@ pub fn test_connector(attr: TokenStream, input: TokenStream) -> TokenStream {
 
         quote! {
             #[test]
+            #ignore_attr
             fn #test_function_name() {
-                let args = test_setup::TestApiArgs::new(#test_function_name_lit);
+                let args = test_setup::TestApiArgs::new(#test_function_name_lit, &[#(#preview_features,)*]);
 
                 if test_setup::should_skip_test(
                     &args,
@@ -85,8 +94,9 @@ pub fn test_connector(attr: TokenStream, input: TokenStream) -> TokenStream {
     } else {
         quote! {
             #[test]
+            #ignore_attr
             fn #test_function_name() {
-                let args = test_setup::TestApiArgs::new(#test_function_name_lit);
+                let args = test_setup::TestApiArgs::new(#test_function_name_lit, &[#(#preview_features,)*]);
 
                 if test_setup::should_skip_test(
                     &args,
@@ -110,6 +120,8 @@ struct TestConnectorAttrs {
     include_tagged: Vec<syn::Path>,
     exclude_tagged: Vec<syn::Path>,
     capabilities: Vec<syn::Path>,
+    preview_features: Vec<syn::LitStr>,
+    ignore_reason: Option<LitStr>,
 }
 
 impl TestConnectorAttrs {
@@ -118,7 +130,18 @@ impl TestConnectorAttrs {
             p if p.is_ident("tags") => &mut self.include_tagged,
             p if p.is_ident("exclude") => &mut self.exclude_tagged,
             p if p.is_ident("capabilities") => &mut self.capabilities,
-            p if p.is_ident("logs") => return Ok(()), // TODO
+            p if p.is_ident("preview_features") => {
+                self.preview_features.reserve(list.nested.len());
+
+                for item in list.nested {
+                    match item {
+                        NestedMeta::Lit(Lit::Str(s)) => self.preview_features.push(s),
+                        other => return Err(syn::Error::new_spanned(other, "Unexpected argument")),
+                    }
+                }
+
+                return Ok(());
+            }
             other => return Err(syn::Error::new_spanned(other, "Unexpected argument")),
         };
 
