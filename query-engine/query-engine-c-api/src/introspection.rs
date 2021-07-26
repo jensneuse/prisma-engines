@@ -1,4 +1,4 @@
-use introspection_connector::{ConnectorResult, DatabaseMetadata, IntrospectionConnector, IntrospectionResultOutput, ConnectorError, IntrospectionResult};
+use introspection_connector::{IntrospectionContext, ConnectorResult, DatabaseMetadata, IntrospectionConnector, IntrospectionResultOutput, ConnectorError, IntrospectionResult};
 use serde_derive::*;
 use sql_introspection_connector::SqlIntrospectionConnector;
 use introspection_core::Error;
@@ -23,18 +23,35 @@ impl Introspection {
             }
         };
 
+        let config2 = match datamodel::parse_configuration(&schema)
+            .map_err(|diagnostics| Error::DatamodelError(diagnostics.to_pretty_string("schema.prisma", &schema))) {
+            Ok(config) => config,
+            Err(e) => {
+                return Result::Err(Error::DatamodelError(e.to_string()))
+            }
+        };
+
         let ds = config.subject
             .datasources
             .first().unwrap();
 
-        let url = ds.load_url().unwrap();
+        let url = ds.load_url(load_env_var).unwrap();
 
-        let connector = match SqlIntrospectionConnector::new(url.as_str()).await {
+        let preview_features = config.subject.preview_features().map(Clone::clone).collect();
+
+        let connector = match SqlIntrospectionConnector::new(url.as_str(),preview_features).await {
             introspection_connector::ConnectorResult::Ok(connector) => connector,
             introspection_connector::ConnectorResult::Err(e) => return Result::Err(Error::ConnectorError(e)),
         };
+
         let datamodel = Datamodel::new();
-        let result = match connector.introspect(&datamodel).await {
+
+        let ctx = IntrospectionContext {
+            preview_features: config.subject.preview_features().map(Clone::clone).collect(),
+            source: config.subject.datasources.into_iter().next().unwrap(),
+        };
+
+        let result = match connector.introspect(&datamodel,ctx).await {
             Ok(introspection_result) => {
                 if introspection_result.data_model.is_empty() {
                     Result::Err(Error::IntrospectionResultEmpty(url.to_string()))
@@ -42,11 +59,15 @@ impl Introspection {
                     Result::Ok(datamodel::render_datamodel_and_config_to_string(&Datamodel {
                         models: introspection_result.data_model.models,
                         enums: introspection_result.data_model.enums,
-                    }, &config.subject))
+                    }, &config2.subject))
                 }
             }
             Err(e) => Result::Err(Error::ConnectorError(e)),
         };
         result
     }
+}
+
+fn load_env_var(key: &str) -> Option<String> {
+    std::env::var(key).ok()
 }

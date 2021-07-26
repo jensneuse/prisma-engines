@@ -19,7 +19,7 @@ use tracing::{metadata::LevelFilter, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use introspection_core::Error;
 use sql_introspection_connector::SqlIntrospectionConnector;
-use introspection_connector::IntrospectionConnector;
+use introspection_connector::{IntrospectionConnector, IntrospectionContext};
 use datamodel::diagnostics::{Validated, Diagnostics};
 
 /// The main engine, that can be cloned between threads when using JavaScript
@@ -138,25 +138,39 @@ impl QueryEngine {
             }
         };
 
+        let config2 = match datamodel::parse_configuration(&schema)
+            .map_err(|diagnostics| Error::DatamodelError(diagnostics.to_pretty_string("schema.prisma", &schema))) {
+            Ok(config) => config,
+            Err(e) => {
+                return Result::Err(Error::DatamodelError(e.to_string()));
+            }
+        };
+
         let ds = config.subject
             .datasources
             .first().unwrap();
 
-        let url = ds.load_url().unwrap();
+        let url = ds.load_url(load_env_var).unwrap();
 
-        let connector = match SqlIntrospectionConnector::new(url.as_str()).await {
+        let preview_features = config.subject.preview_features().map(Clone::clone).collect();
+
+        let connector = match SqlIntrospectionConnector::new(url.as_str(),preview_features).await {
             introspection_connector::ConnectorResult::Ok(connector) => connector,
             introspection_connector::ConnectorResult::Err(e) => return Result::Err(Error::ConnectorError(e)),
         };
         let datamodel = Datamodel::new();
-        let result = match connector.introspect(&datamodel).await {
+        let ctx = IntrospectionContext {
+            preview_features: config.subject.preview_features().map(Clone::clone).collect(),
+            source: config.subject.datasources.into_iter().next().unwrap(),
+        };
+        let result = match connector.introspect(&datamodel,ctx).await {
             Ok(introspection_result) => {
                 if introspection_result.data_model.is_empty() {
                     Result::Err(Error::IntrospectionResultEmpty(url.to_string()))
                 } else {
                     Result::Ok(EngineIntrospectionResult {
                         datamodel: introspection_result.data_model,
-                        configuration: config.subject,
+                        configuration: config2.subject,
                     })
                 }
             }
@@ -183,7 +197,7 @@ impl QueryEngine {
 
                 let preview_features: Vec<_> = builder.config.subject.preview_features().cloned().collect();
                 let url = data_source
-                    .load_url()
+                    .load_url(load_env_var)
                     .map_err(|err| crate::error::ApiError::Conversion(err, builder.datamodel.raw.clone()))?;
 
                 let (db_name, executor) = exec_loader::load(&data_source, &preview_features, &url).await?;
@@ -332,4 +346,8 @@ pub fn set_panic_hook() {
 
         original_hook(info)
     }));
+}
+
+fn load_env_var(key: &str) -> Option<String> {
+    std::env::var(key).ok()
 }

@@ -60,7 +60,7 @@ impl PrismaContext {
             .first()
             .ok_or_else(|| PrismaError::ConfigurationError("No valid data source found".into()))?;
 
-        let url = data_source.load_url()?;
+        let url = data_source.load_url(load_env_var)?;
 
         // Load executor
 
@@ -125,4 +125,8 @@ impl PrismaContext {
     pub fn executor(&self) -> &(dyn QueryExecutor + Send + Sync) {
         &*self.executor
     }
+}
+
+fn load_env_var(key: &str) -> Option<String> {
+    std::env::var(key).ok()
 }

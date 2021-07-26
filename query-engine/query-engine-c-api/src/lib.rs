@@ -1,7 +1,6 @@
 #![feature(once_cell)]
 
 mod introspection;
-mod engine_old;
 mod context;
 mod error;
 mod engine;
@@ -18,7 +17,6 @@ use introspection_core::Error;
 use std::future::Future;
 use crate::engine::{QueryEngine, TelemetryOptions};
 use crate::error::ApiError;
-use crate::engine_old::Engine;
 use std::sync::Arc;
 use request_handlers::{GraphQlBody, PrismaResponse};
 use tokio::runtime::Runtime;
@@ -221,7 +219,6 @@ mod tests {
     use crate::{prisma_introspect, prisma_new, prisma_execute, free_prisma, free_introspection_result};
     use crate::CString;
     use crate::CStr;
-    use crate::engine_old::Engine;
     use crate::Prisma;
     use introspection_core::Error;
     use std::ptr::null;

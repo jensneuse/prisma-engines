@@ -3,6 +3,7 @@ use datamodel::diagnostics::Diagnostics;
 use graphql_parser::query::ParseError as GqlParseError;
 use query_core::CoreError;
 use thiserror::Error;
+use tracing::log::kv::Source;
 
 #[derive(Debug, Error)]
 pub enum PrismaError {
@@ -58,7 +59,7 @@ impl From<PrismaError> for user_facing_errors::Error {
             },
             PrismaError::ConversionError(errors, dml_string) => {
                 let mut full_error = errors.to_pretty_string("schema.prisma", &dml_string);
-                write!(full_error, "\nValidation Error Count: {}", errors.errors.len()).unwrap();
+                write!(full_error, "\nValidation Error Count: {}", errors).unwrap();
 
                 user_facing_errors::Error::from(user_facing_errors::KnownError::new(
                     user_facing_errors::common::SchemaParserError { full_error },
@@ -141,7 +142,7 @@ impl From<base64::DecodeError> for PrismaError {
 
 impl From<GqlParseError> for PrismaError {
     fn from(e: GqlParseError) -> PrismaError {
-        PrismaError::QueryConversionError(format!("Error parsing GraphQL query: {}", e))
+        PrismaError::QueryConversionError(format!("Error parsing GraphQL query: {}", e ))
     }
 }
 
@@ -186,7 +187,7 @@ impl From<ApiError> for user_facing_errors::Error {
                                 }) => err.into(),
             ApiError::Conversion(errors, dml_string) => {
                 let mut full_error = errors.to_pretty_string("schema.prisma", &dml_string);
-                write!(full_error, "\nValidation Error Count: {}", errors.errors.len()).unwrap();
+                write!(full_error, "\nValidation Error Count: {}", errors).unwrap();
 
                 user_facing_errors::Error::from(user_facing_errors::KnownError::new(
                     user_facing_errors::common::SchemaParserError { full_error },
