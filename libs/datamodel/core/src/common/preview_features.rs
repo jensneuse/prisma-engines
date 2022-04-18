@@ -1,5 +1,6 @@
 use once_cell::sync::Lazy;
 use serde::{Serialize, Serializer};
+use std::fmt;
 use PreviewFeature::*;
 
 macro_rules! features {
@@ -23,11 +24,11 @@ macro_rules! features {
             }
         }
 
-        impl ToString for PreviewFeature {
-            fn to_string(&self) -> String {
+        impl fmt::Display for PreviewFeature {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 match self {
                     $(
-                        Self::$variant => decapitalize(stringify!($variant)),
+                        Self::$variant => write!(f, "{}", decapitalize(stringify!($variant))),
                     )*
                 }
             }
@@ -54,8 +55,12 @@ features!(
     SelectRelationCount,
     OrderByAggregateGroup,
     FilterJson,
-    PlanetScaleMode,
+    ReferentialIntegrity,
     ReferentialActions,
+    InteractiveTransactions,
+    NamedConstraints,
+    FullTextSearch,
+    DataProxy,
 );
 
 // Mapping of which active, deprecated and hidden
@@ -65,20 +70,18 @@ features!(
 pub static GENERATOR: Lazy<FeatureMap> = Lazy::new(|| {
     FeatureMap::default()
         .with_active(vec![
-            MicrosoftSqlServer,
-            OrderByRelation,
-            NApi,
-            SelectRelationCount,
-            OrderByAggregateGroup,
             FilterJson,
-            PlanetScaleMode,
-            ReferentialActions,
+            ReferentialIntegrity,
             MongoDb,
+            InteractiveTransactions,
+            FullTextSearch,
+            DataProxy,
         ])
         .with_deprecated(vec![
             AtomicNumberOperations,
             AggregateApi,
             Middlewares,
+            NamedConstraints,
             NativeTypes,
             Distinct,
             ConnectOrCreate,
@@ -86,11 +89,14 @@ pub static GENERATOR: Lazy<FeatureMap> = Lazy::new(|| {
             UncheckedScalarInputs,
             GroupBy,
             CreateMany,
+            MicrosoftSqlServer,
+            SelectRelationCount,
+            OrderByAggregateGroup,
+            OrderByRelation,
+            ReferentialActions,
+            NApi,
         ])
 });
-
-/// Datasource preview features.
-pub static DATASOURCE: Lazy<FeatureMap> = Lazy::new(FeatureMap::default);
 
 #[derive(Debug, Default)]
 pub struct FeatureMap {
@@ -150,7 +156,7 @@ impl Serialize for PreviewFeature {
 
 /// Lowercases first character.
 /// Assumes 1-byte characters!
-pub fn decapitalize(s: &str) -> String {
+fn decapitalize(s: &str) -> String {
     let first_char = s.chars().next().unwrap();
     format!("{}{}", first_char.to_lowercase(), &s[1..])
 }

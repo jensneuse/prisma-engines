@@ -1,11 +1,13 @@
 use datamodel_connector::{
     connector_error::ConnectorError,
     helper::{args_vec_from_opt, parse_one_opt_u32, parse_one_u32, parse_two_opt_u32},
-    Connector, ConnectorCapability,
+    Connector, ConnectorCapability, ConstraintNameSpace, ConstraintType, ConstraintViolationScope,
+    ReferentialIntegrity,
 };
+use dml::datamodel::Datamodel;
 use dml::{
     field::{Field, FieldType},
-    model::{IndexType, Model},
+    model::Model,
     native_type_constructor::NativeTypeConstructor,
     native_type_instance::NativeTypeInstance,
     relation_info::ReferentialAction,
@@ -13,6 +15,7 @@ use dml::{
 };
 use enumflags2::BitFlags;
 use native_types::MySqlType::{self, *};
+use std::collections::BTreeMap;
 
 const INT_TYPE_NAME: &str = "Int";
 const UNSIGNED_INT_TYPE_NAME: &str = "UnsignedInt";
@@ -61,19 +64,16 @@ const NATIVE_TYPES_THAT_CAN_NOT_BE_USED_IN_KEY_SPECIFICATION: &[&str] = &[
 pub struct MySqlDatamodelConnector {
     capabilities: Vec<ConnectorCapability>,
     constructors: Vec<NativeTypeConstructor>,
-    referential_actions: BitFlags<ReferentialAction>,
-    is_planetscale: bool,
+    referential_integrity: ReferentialIntegrity,
 }
 
 impl MySqlDatamodelConnector {
-    pub fn new(is_planetscale: bool) -> MySqlDatamodelConnector {
-        use ReferentialAction::*;
-
+    pub fn new(referential_integrity: ReferentialIntegrity) -> MySqlDatamodelConnector {
         let mut capabilities = vec![
             ConnectorCapability::RelationsOverNonUniqueCriteria,
             ConnectorCapability::Enums,
             ConnectorCapability::Json,
-            ConnectorCapability::MultipleIndexesWithSameName,
+            ConnectorCapability::MultipleIndexesWithSameName, //TODO(matthias) get rid of this
             ConnectorCapability::AutoIncrementAllowedOnNonId,
             ConnectorCapability::RelationFieldsInArbitraryOrder,
             ConnectorCapability::CreateMany,
@@ -85,9 +85,12 @@ impl MySqlDatamodelConnector {
             ConnectorCapability::AutoIncrement,
             ConnectorCapability::CompoundIds,
             ConnectorCapability::AnyId,
+            ConnectorCapability::QueryRaw,
+            ConnectorCapability::NamedForeignKeys,
+            ConnectorCapability::AdvancedJsonNullability,
         ];
 
-        if !is_planetscale {
+        if referential_integrity.uses_foreign_keys() {
             capabilities.push(ConnectorCapability::ForeignKeys);
         }
 
@@ -163,17 +166,10 @@ impl MySqlDatamodelConnector {
             json,
         ];
 
-        let referential_actions = if is_planetscale {
-            Restrict | SetNull
-        } else {
-            Restrict | Cascade | SetNull | NoAction | SetDefault
-        };
-
         MySqlDatamodelConnector {
             capabilities,
             constructors,
-            referential_actions,
-            is_planetscale,
+            referential_integrity,
         }
     }
 }
@@ -204,11 +200,14 @@ impl Connector for MySqlDatamodelConnector {
     }
 
     fn referential_actions(&self) -> BitFlags<ReferentialAction> {
-        self.referential_actions
+        use ReferentialAction::*;
+
+        self.referential_integrity
+            .allowed_referential_actions(Restrict | Cascade | SetNull | NoAction | SetDefault)
     }
 
     fn emulates_referential_actions(&self) -> bool {
-        self.is_planetscale
+        matches!(self.referential_integrity, ReferentialIntegrity::Prisma)
     }
 
     fn scalar_type_for_native_type(&self, native_type: serde_json::Value) -> ScalarType {
@@ -280,47 +279,39 @@ impl Connector for MySqlDatamodelConnector {
             .any(|(st, nt)| scalar_type == st && &native_type == nt)
     }
 
-    fn validate_field(&self, field: &Field) -> Result<(), ConnectorError> {
-        match field.field_type() {
-            FieldType::Scalar(scalar_type, _, Some(native_type_instance)) => {
-                let native_type_name = native_type_instance.name.as_str();
-                let native_type: MySqlType = native_type_instance.deserialize_native_type();
-                let error = self.native_instance_error(native_type_instance.clone());
-                let incompatible_with_key =
-                    NATIVE_TYPES_THAT_CAN_NOT_BE_USED_IN_KEY_SPECIFICATION.contains(&native_type_name);
+    fn validate_field(&self, field: &Field, errors: &mut Vec<ConnectorError>) {
+        if let FieldType::Scalar(scalar_type, _, Some(native_type_instance)) = field.field_type() {
+            let native_type: MySqlType = native_type_instance.deserialize_native_type();
+            let error = self.native_instance_error(native_type_instance);
 
-                match native_type {
-                    Decimal(Some((precision, scale))) if scale > precision => {
-                        error.new_scale_larger_than_precision_error()
-                    }
-                    Decimal(Some((precision, _))) if precision > 65 => {
-                        error.new_argument_m_out_of_range_error("Precision can range from 1 to 65.")
-                    }
-                    Decimal(Some((_, scale))) if scale > 30 => {
-                        error.new_argument_m_out_of_range_error("Scale can range from 0 to 30.")
-                    }
-                    Bit(length) if length == 0 || length > 64 => {
-                        error.new_argument_m_out_of_range_error("M can range from 1 to 64.")
-                    }
-                    Char(length) if length > 255 => {
-                        error.new_argument_m_out_of_range_error("M can range from 0 to 255.")
-                    }
-                    VarChar(length) if length > 65535 => {
-                        error.new_argument_m_out_of_range_error("M can range from 0 to 65,535.")
-                    }
-                    Bit(n) if n > 1 && scalar_type.is_boolean() => {
-                        error.new_argument_m_out_of_range_error("only Bit(1) can be used as Boolean.")
-                    }
-                    _ if field.is_unique() && incompatible_with_key => error.new_incompatible_native_type_with_unique(),
-                    _ if field.is_id() && incompatible_with_key => error.new_incompatible_native_type_with_id(),
-                    _ => Ok(()),
+            match native_type {
+                Decimal(Some((precision, scale))) if scale > precision => {
+                    errors.push(error.new_scale_larger_than_precision_error())
                 }
+                Decimal(Some((precision, _))) if precision > 65 => {
+                    errors.push(error.new_argument_m_out_of_range_error("Precision can range from 1 to 65."))
+                }
+                Decimal(Some((_, scale))) if scale > 30 => {
+                    errors.push(error.new_argument_m_out_of_range_error("Scale can range from 0 to 30."))
+                }
+                Bit(length) if length == 0 || length > 64 => {
+                    errors.push(error.new_argument_m_out_of_range_error("M can range from 1 to 64."))
+                }
+                Char(length) if length > 255 => {
+                    errors.push(error.new_argument_m_out_of_range_error("M can range from 0 to 255."))
+                }
+                VarChar(length) if length > 65535 => {
+                    errors.push(error.new_argument_m_out_of_range_error("M can range from 0 to 65,535."))
+                }
+                Bit(n) if n > 1 && scalar_type.is_boolean() => {
+                    errors.push(error.new_argument_m_out_of_range_error("only Bit(1) can be used as Boolean."))
+                }
+                _ => (),
             }
-            _ => Ok(()),
         }
     }
 
-    fn validate_model(&self, model: &Model) -> Result<(), ConnectorError> {
+    fn validate_model(&self, model: &Model, errors: &mut Vec<ConnectorError>) {
         for index_definition in model.indices.iter() {
             let fields = index_definition.fields.iter().map(|f| model.find_field(f).unwrap());
             for f in fields {
@@ -328,29 +319,72 @@ impl Connector for MySqlDatamodelConnector {
                     let native_type_name = native_type.name.as_str();
 
                     if NATIVE_TYPES_THAT_CAN_NOT_BE_USED_IN_KEY_SPECIFICATION.contains(&native_type_name) {
-                        return if index_definition.tpe == IndexType::Unique {
-                            self.native_instance_error(native_type.clone())
-                                .new_incompatible_native_type_with_unique()
+                        if index_definition.is_unique() {
+                            errors.push(
+                                self.native_instance_error(native_type.clone())
+                                    .new_incompatible_native_type_with_unique(),
+                            )
                         } else {
-                            self.native_instance_error(native_type.clone())
-                                .new_incompatible_native_type_with_index()
+                            errors.push(
+                                self.native_instance_error(native_type.clone())
+                                    .new_incompatible_native_type_with_index(),
+                            )
                         };
+
+                        break;
                     }
                 }
             }
         }
-        for id_field in model.id_fields.iter() {
-            let field = model.find_field(id_field).unwrap();
-            if let FieldType::Scalar(_, _, Some(native_type)) = field.field_type() {
-                let native_type_name = native_type.name.as_str();
-                if NATIVE_TYPES_THAT_CAN_NOT_BE_USED_IN_KEY_SPECIFICATION.contains(&native_type_name) {
-                    return self
-                        .native_instance_error(native_type.clone())
-                        .new_incompatible_native_type_with_id();
+
+        if let Some(pk) = &model.primary_key {
+            for id_field in pk.fields.iter() {
+                let field = model.find_field(id_field).unwrap();
+                if let FieldType::Scalar(_, _, Some(native_type)) = field.field_type() {
+                    let native_type_name = native_type.name.as_str();
+                    if NATIVE_TYPES_THAT_CAN_NOT_BE_USED_IN_KEY_SPECIFICATION.contains(&native_type_name) {
+                        errors.push(
+                            self.native_instance_error(native_type.clone())
+                                .new_incompatible_native_type_with_id(),
+                        );
+
+                        break;
+                    }
                 }
             }
         }
-        Ok(())
+    }
+
+    fn get_constraint_namespace_violations<'dml>(&self, schema: &'dml Datamodel) -> Vec<ConstraintNameSpace<'dml>> {
+        let mut potential_name_space_violations: BTreeMap<
+            (&str, ConstraintViolationScope),
+            Vec<(&str, ConstraintType)>,
+        > = BTreeMap::new();
+
+        //Foreign Keys have a global namespace
+        //Keys and Indexes have a model namespace
+        for model in schema.models() {
+            for name in model
+                .relation_fields()
+                .filter_map(|rf| rf.relation_info.fk_name.as_ref())
+            {
+                let entry = potential_name_space_violations
+                    .entry((name, ConstraintViolationScope::GlobalForeignKey))
+                    .or_insert_with(Vec::new);
+
+                entry.push((&model.name, ConstraintType::ForeignKey));
+            }
+
+            for name in model.indices.iter().filter_map(|i| i.db_name.as_ref()) {
+                let entry = potential_name_space_violations
+                    .entry((name, ConstraintViolationScope::ModelKeyIndex(&model.name)))
+                    .or_insert_with(Vec::new);
+
+                entry.push((&model.name, ConstraintType::KeyOrIdx));
+            }
+        }
+
+        ConstraintNameSpace::flatten(potential_name_space_violations)
     }
 
     fn available_native_type_constructors(&self) -> &[NativeTypeConstructor] {
@@ -446,7 +480,7 @@ impl Connector for MySqlDatamodelConnector {
         if let Some(constructor) = self.find_native_type_constructor(constructor_name) {
             Ok(NativeTypeInstance::new(constructor.name.as_str(), args, &native_type))
         } else {
-            self.native_str_error(constructor_name).native_type_name_unknown()
+            Err(self.native_str_error(constructor_name).native_type_name_unknown())
         }
     }
 

@@ -1,22 +1,21 @@
-use super::db::ParserDatabase;
-use super::*;
+mod validations;
+
+use super::{db::ParserDatabase, lift::LiftAstToDml, validate::Validator};
 use crate::{
-    ast, common::preview_features::PreviewFeature, configuration, diagnostics::Diagnostics,
-    transform::ast_to_dml::standardise_parsing::StandardiserForParsing, ValidatedDatamodel,
+    ast, common::preview_features::PreviewFeature, configuration, diagnostics::Diagnostics, ValidatedDatamodel,
 };
 use enumflags2::BitFlags;
 
 /// Is responsible for loading and validating the Datamodel defined in an AST.
 /// Wrapper for all lift and validation steps
-pub struct ValidationPipeline<'a> {
+pub(crate) struct ValidationPipeline<'a> {
     source: Option<&'a configuration::Datasource>,
     validator: Validator<'a>,
-    standardiser_for_formatting: StandardiserForFormatting,
-    standardiser_for_parsing: StandardiserForParsing,
+    preview_features: BitFlags<PreviewFeature>,
 }
 
 impl<'a, 'b> ValidationPipeline<'a> {
-    pub fn new(
+    pub(crate) fn new(
         sources: &'a [configuration::Datasource],
         preview_features: BitFlags<PreviewFeature>,
     ) -> ValidationPipeline<'a> {
@@ -24,9 +23,8 @@ impl<'a, 'b> ValidationPipeline<'a> {
 
         ValidationPipeline {
             source,
-            validator: Validator::new(source, preview_features),
-            standardiser_for_formatting: StandardiserForFormatting::new(),
-            standardiser_for_parsing: StandardiserForParsing::new(preview_features),
+            validator: Validator::new(source),
+            preview_features,
         }
     }
 
@@ -38,7 +36,7 @@ impl<'a, 'b> ValidationPipeline<'a> {
     /// * Perform string interpolation
     /// * Resolve and check default values
     /// * Resolve and check all field types
-    pub fn validate(
+    pub(crate) fn validate(
         &self,
         ast_schema: &ast::SchemaAst,
         relation_transformation_enabled: bool,
@@ -48,44 +46,28 @@ impl<'a, 'b> ValidationPipeline<'a> {
         // Phase 0 is parsing.
         // Phase 1 is source block loading.
 
-        // Phase 2: Name resolution.
-        let (db, mut diagnostics) = ParserDatabase::new(ast_schema, self.source, diagnostics);
+        // Phase 2: Make sense of the AST.
+        let (db, mut diagnostics) = ParserDatabase::new(ast_schema, self.source, diagnostics, self.preview_features);
 
         // Early return so that the validator does not have to deal with invalid schemas
         diagnostics.to_result()?;
 
-        // Phase 3: Lift AST to DML.
-        let mut schema = LiftAstToDml::new(&db, &mut diagnostics).lift();
-
-        // Cannot continue on lifter error.
+        // Phase 3: Global validations after we have consistent data model.
+        validations::validate(&db, &mut diagnostics, relation_transformation_enabled);
         diagnostics.to_result()?;
 
-        // Phase 4: Validation
-        self.validator.validate(&db, &mut schema, &mut diagnostics);
+        // Phase 4: Lift AST to DML. This can't fail.
+        let schema = LiftAstToDml::new(&db).lift();
 
-        // Early return so that the standardiser does not have to deal with invalid schemas
-        diagnostics.to_result()?;
+        // From now on we do not operate on the internal ast anymore, but DML.
+        // Please try to avoid all new validations after this, if you can.
 
-        // TODO: Move consistency stuff into different module.
-        // Phase 5: Consistency fixes. These don't fail and always run, during parsing AND formatting
-        if let Err(mut err) = self.standardiser_for_parsing.standardise(&mut schema) {
-            diagnostics.append(&mut err);
-        }
+        // Phase 5: Validation (deprecated, move stuff out from here if you can)
+        self.validator.validate(db.ast(), &schema, &mut diagnostics);
 
-        // Transform phase: These only run during formatting.
-        if relation_transformation_enabled {
-            if let Err(mut err) = self.standardiser_for_formatting.standardise(ast_schema, &mut schema) {
-                diagnostics.append(&mut err);
-            }
-        }
-
-        // Early return so that the post validation does not have to deal with invalid schemas
-        diagnostics.to_result()?;
-
-        // Phase 6: Post Standardisation Validation
-        if let Err(mut err) = self.validator.post_standardisation_validate(ast_schema, &mut schema) {
-            diagnostics.append(&mut err);
-        }
+        // Phase 6: Post Standardisation Validation (deprecated, move stuff out from here if you can)
+        self.validator
+            .post_standardisation_validate(ast_schema, &schema, &mut diagnostics);
 
         diagnostics.to_result()?;
 

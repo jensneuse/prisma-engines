@@ -26,7 +26,7 @@ pub fn get_query_schema(datamodel_string: &str) -> (QuerySchema, datamodel::dml:
         BuildMode::Modern,
         false,
         capabilities,
-        config.subject.preview_features().cloned().collect(),
+        config.subject.preview_features().iter().collect(),
     );
 
     (schema, dm)
@@ -117,7 +117,8 @@ fn test_dmmf_cli_command(schema: &str) -> PrismaResult<()> {
 
     let cli_cmd = CliCommand::from_opt(&prisma_opt)?.unwrap();
 
-    let result = test_setup::runtime::run_with_tokio(cli_cmd.execute());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let result = runtime.block_on(cli_cmd.execute());
     result?;
 
     Ok(())

@@ -10,9 +10,7 @@ use query_engine_tests::*;
 // - 1!:M
 //
 // 2) Checks basic cursor functionality.
-
-// TODO(dom): Not working on mongo. No compound id (yet)?
-#[test_suite(exclude(MongoDb))]
+#[test_suite(capabilities(CompoundIds))]
 mod compound_pk_rel {
     use indoc::indoc;
     use query_engine_tests::run_query;
@@ -128,9 +126,9 @@ mod compound_pk_rel {
     //  nested updateM | -      | not possible (1!:1)
     // "Using a compound ID that includes a 1!:1 single-field relation"
     #[connector_test(schema(schema_1_1_single_rel))]
-    async fn cpd_1_1_single_field_rel(runner: &Runner) -> TestResult<()> {
+    async fn cpd_1_1_single_field_rel(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: { name: "Paul" , age: 40, child: { create: { id: 1, name: "Panther" }}}) {
               name
               age
@@ -144,7 +142,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(
               where: {
                 name_child_id: {
@@ -162,7 +160,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(where: { id: 1 } data: { parent: { update: { age: { set: 42 }}}}) {
               parent { age }
             }
@@ -171,7 +169,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             upsertOneParent(
               where: {
                 name_child_id: {
@@ -189,7 +187,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             deleteOneParent(
               where: {
                 name_child_id: {
@@ -205,7 +203,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(
               data: {
                 name: "Milutin",
@@ -227,7 +225,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 3
@@ -242,7 +240,7 @@ mod compound_pk_rel {
 
         // Currently doesn't work
         // insta::assert_snapshot!(
-        //   run_query!(runner, r#"mutation {
+        //   run_query!(&runner, r#"mutation {
         //     updateOneParent(
         //       where: { child: 2 }
         //       data: {
@@ -262,7 +260,7 @@ mod compound_pk_rel {
         // );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -291,7 +289,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -333,9 +331,9 @@ mod compound_pk_rel {
     //  nested updateM | -      | not possible (1!:1)
     // "Using a compound ID that includes a 1!:1 multi-field relation" should "work"
     #[connector_test(schema(schema_1_1_multi_rel))]
-    async fn cpd_1_1_multi_field_rel(runner: &Runner) -> TestResult<()> {
+    async fn cpd_1_1_multi_field_rel(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: { name: "Paul" , age: 40, child: { create: { id: 1, ssn: "1", name: "Panther" }}}) {
               name
               age
@@ -349,7 +347,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(
               where: {
                 name_child_id_child_ssn: {
@@ -367,7 +365,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(where: { id: 1 } data: { parent: { update: { age: { set: 42 }}}}) {
               parent { age }
             }
@@ -376,7 +374,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             upsertOneParent(
               where: {
                 name_child_id_child_ssn: {
@@ -399,7 +397,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             deleteOneParent(
               where: {
                 name_child_id_child_ssn: {
@@ -416,7 +414,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(
               data: {
                 name: "Milutin",
@@ -439,7 +437,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 3
@@ -455,7 +453,7 @@ mod compound_pk_rel {
 
         // Currently doesn't work
         // insta::assert_snapshot!(
-        //   run_query!(runner, r#"mutation {
+        //   run_query!(&runner, r#"mutation {
         //     updateParent(
         //       where: { child: 2 }
         //       data: {
@@ -475,7 +473,7 @@ mod compound_pk_rel {
         // );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -504,7 +502,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -546,9 +544,9 @@ mod compound_pk_rel {
     //  nested set     | -      | not (really) possible (1!:m)
     // "Using a compound ID that includes a 1!:M single-field relation"
     #[connector_test(schema(schema_1_m_single_rel))]
-    async fn cpd_1_m_single_field_rel(runner: &Runner) -> TestResult<()> {
+    async fn cpd_1_m_single_field_rel(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: { name: "Paul" , age: 40, child: { create: { id: 1, name: "Panther" }}}) {
               name
               age
@@ -562,7 +560,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(
               where: {
                 name_child_id: {
@@ -580,7 +578,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(where: { id: 1 } data: {
               parents: {
                  updateMany: {
@@ -596,7 +594,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             upsertOneParent(
               where: {
                 name_child_id: {
@@ -614,7 +612,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             deleteOneParent(
               where: {
                 name_child_id: {
@@ -630,7 +628,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(
               data: {
                 name: "Milutin",
@@ -652,7 +650,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 3
@@ -667,7 +665,7 @@ mod compound_pk_rel {
 
         // Currently doesn't work
         // insta::assert_snapshot!(
-        //   run_query!(runner, r#"mutation {
+        //   run_query!(&runner, r#"mutation {
         //     updateOneParent(
         //       where: { child: 2 }
         //       data: {
@@ -687,7 +685,7 @@ mod compound_pk_rel {
         // );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -717,7 +715,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -742,7 +740,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -786,9 +784,9 @@ mod compound_pk_rel {
     //  nested set     | -      | not (really) possible (1!:m)
     // "Using a compound ID that includes a 1!:M multi-field relation"
     #[connector_test(schema(schema_1_m_multi_rel))]
-    async fn cpd_1_m_multi_field_rel(runner: &Runner) -> TestResult<()> {
+    async fn cpd_1_m_multi_field_rel(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: { name: "Paul", age: 40, child: { create: { id: 1, ssn: "1", name: "Panther" }}}) {
               name
               age
@@ -802,7 +800,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(
               where: {
                 name_child_id_child_ssn: {
@@ -821,7 +819,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 1 }
               data: {
@@ -840,7 +838,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             upsertOneParent(
               where: {
                 name_child_id_child_ssn: {
@@ -863,7 +861,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             deleteOneParent(
               where: {
                 name_child_id_child_ssn: {
@@ -880,7 +878,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(
               data: {
                 name: "Milutin",
@@ -903,7 +901,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 3
@@ -919,7 +917,7 @@ mod compound_pk_rel {
 
         // Currently doesn't work
         // insta::assert_snapshot!(
-        //   run_query!(runner, r#"mutation {
+        //   run_query!(&runner, r#"mutation {
         //     updateParent(
         //       where: { child: 2 }
         //       data: {
@@ -939,7 +937,7 @@ mod compound_pk_rel {
         // );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -970,7 +968,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -995,7 +993,7 @@ mod compound_pk_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {

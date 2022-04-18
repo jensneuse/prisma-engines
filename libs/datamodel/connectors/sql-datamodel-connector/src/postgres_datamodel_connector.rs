@@ -1,11 +1,13 @@
 use datamodel_connector::{
     connector_error::ConnectorError,
     helper::{arg_vec_from_opt, args_vec_from_opt, parse_one_opt_u32, parse_two_opt_u32},
-    Connector, ConnectorCapability,
+    Connector, ConnectorCapability, ConstraintNameSpace, ConstraintType, ConstraintViolationScope,
+    ReferentialIntegrity,
 };
+use dml::datamodel::Datamodel;
 use dml::{
     field::{Field, FieldType},
-    model::{IndexType, Model},
+    model::Model,
     native_type_constructor::NativeTypeConstructor,
     native_type_instance::NativeTypeInstance,
     relation_info::ReferentialAction,
@@ -13,6 +15,7 @@ use dml::{
 };
 use enumflags2::BitFlags;
 use native_types::PostgresType::{self, *};
+use std::collections::BTreeMap;
 
 const SMALL_INT_TYPE_NAME: &str = "SmallInt";
 const INTEGER_TYPE_NAME: &str = "Integer";
@@ -44,15 +47,13 @@ const JSON_B_TYPE_NAME: &str = "JsonB";
 pub struct PostgresDatamodelConnector {
     capabilities: Vec<ConnectorCapability>,
     constructors: Vec<NativeTypeConstructor>,
-    referential_actions: BitFlags<ReferentialAction>,
+    referential_integrity: ReferentialIntegrity,
 }
 
 //todo should this also contain the pretty printed output for SQL rendering?
 impl PostgresDatamodelConnector {
-    pub fn new() -> PostgresDatamodelConnector {
-        use ReferentialAction::*;
-
-        let capabilities = vec![
+    pub fn new(referential_integrity: ReferentialIntegrity) -> PostgresDatamodelConnector {
+        let mut capabilities = vec![
             ConnectorCapability::ScalarLists,
             ConnectorCapability::Enums,
             ConnectorCapability::Json,
@@ -69,9 +70,17 @@ impl PostgresDatamodelConnector {
             ConnectorCapability::CreateManyWriteableAutoIncId,
             ConnectorCapability::AutoIncrement,
             ConnectorCapability::CompoundIds,
-            ConnectorCapability::ForeignKeys,
             ConnectorCapability::AnyId,
+            ConnectorCapability::QueryRaw,
+            ConnectorCapability::NamedPrimaryKeys,
+            ConnectorCapability::NamedForeignKeys,
+            ConnectorCapability::FullTextSearchWithoutIndex,
+            ConnectorCapability::AdvancedJsonNullability,
         ];
+
+        if referential_integrity.uses_foreign_keys() {
+            capabilities.push(ConnectorCapability::ForeignKeys);
+        }
 
         let small_int = NativeTypeConstructor::without_args(SMALL_INT_TYPE_NAME, vec![ScalarType::Int]);
         let integer = NativeTypeConstructor::without_args(INTEGER_TYPE_NAME, vec![ScalarType::Int]);
@@ -130,12 +139,10 @@ impl PostgresDatamodelConnector {
             json_b,
         ];
 
-        let referential_actions = NoAction | Restrict | Cascade | SetNull | SetDefault;
-
         PostgresDatamodelConnector {
             capabilities,
             constructors,
-            referential_actions,
+            referential_integrity,
         }
     }
 }
@@ -161,12 +168,18 @@ impl Connector for PostgresDatamodelConnector {
         &self.capabilities
     }
 
+    /// The maximum length of postgres identifiers, in bytes.
+    ///
+    /// Reference: <https://www.postgresql.org/docs/12/limits.html>
     fn constraint_name_length(&self) -> usize {
         63
     }
 
     fn referential_actions(&self) -> BitFlags<ReferentialAction> {
-        self.referential_actions
+        use ReferentialAction::*;
+
+        self.referential_integrity
+            .allowed_referential_actions(NoAction | Restrict | Cascade | SetNull | SetDefault)
     }
 
     fn scalar_type_for_native_type(&self, native_type: serde_json::Value) -> ScalarType {
@@ -230,33 +243,30 @@ impl Connector for PostgresDatamodelConnector {
             .any(|(st, nt)| scalar_type == st && &native_type == nt)
     }
 
-    fn validate_field(&self, field: &Field) -> Result<(), ConnectorError> {
-        match field.field_type() {
-            FieldType::Scalar(_scalar_type, _, Some(native_type_instance)) => {
-                let native_type: PostgresType = native_type_instance.deserialize_native_type();
-                let error = self.native_instance_error(native_type_instance);
+    fn validate_field(&self, field: &Field, errors: &mut Vec<ConnectorError>) {
+        if let FieldType::Scalar(_scalar_type, _, Some(native_type_instance)) = field.field_type() {
+            let native_type: PostgresType = native_type_instance.deserialize_native_type();
+            let error = self.native_instance_error(native_type_instance);
 
-                match native_type {
-                    Decimal(Some((precision, scale))) if scale > precision => {
-                        error.new_scale_larger_than_precision_error()
-                    }
-                    Decimal(Some((prec, _))) if prec > 1000 || prec == 0 => error
-                        .new_argument_m_out_of_range_error("Precision must be positive with a maximum value of 1000."),
-                    Bit(Some(0)) | VarBit(Some(0)) => {
-                        error.new_argument_m_out_of_range_error("M must be a positive integer.")
-                    }
-                    Timestamp(Some(p)) | Timestamptz(Some(p)) | Time(Some(p)) | Timetz(Some(p)) if p > 6 => {
-                        error.new_argument_m_out_of_range_error("M can range from 0 to 6.")
-                    }
-                    Xml if field.is_unique() => error.new_incompatible_native_type_with_unique(),
-                    _ => Ok(()),
+            match native_type {
+                Decimal(Some((precision, scale))) if scale > precision => {
+                    errors.push(error.new_scale_larger_than_precision_error())
                 }
+                Decimal(Some((prec, _))) if prec > 1000 || prec == 0 => errors.push(
+                    error.new_argument_m_out_of_range_error("Precision must be positive with a maximum value of 1000."),
+                ),
+                Bit(Some(0)) | VarBit(Some(0)) => {
+                    errors.push(error.new_argument_m_out_of_range_error("M must be a positive integer."))
+                }
+                Timestamp(Some(p)) | Timestamptz(Some(p)) | Time(Some(p)) | Timetz(Some(p)) if p > 6 => {
+                    errors.push(error.new_argument_m_out_of_range_error("M can range from 0 to 6."))
+                }
+                _ => (),
             }
-            _ => Ok(()),
         }
     }
 
-    fn validate_model(&self, model: &Model) -> Result<(), ConnectorError> {
+    fn validate_model(&self, model: &Model, errors: &mut Vec<ConnectorError>) {
         for index_definition in model.indices.iter() {
             let fields = index_definition.fields.iter().map(|f| model.find_field(f).unwrap());
 
@@ -266,17 +276,79 @@ impl Connector for PostgresDatamodelConnector {
                     let error = self.native_instance_error(native_type);
 
                     if r#type == PostgresType::Xml {
-                        return if index_definition.tpe == IndexType::Unique {
-                            error.new_incompatible_native_type_with_unique()
+                        if index_definition.is_unique() {
+                            errors.push(error.new_incompatible_native_type_with_unique())
                         } else {
-                            error.new_incompatible_native_type_with_index()
+                            errors.push(error.new_incompatible_native_type_with_index())
                         };
+
+                        break;
                     }
                 }
             }
         }
+    }
 
-        Ok(())
+    fn get_constraint_namespace_violations<'dml>(&self, schema: &'dml Datamodel) -> Vec<ConstraintNameSpace<'dml>> {
+        let mut potential_name_space_violations: BTreeMap<
+            (&str, ConstraintViolationScope),
+            Vec<(&str, ConstraintType)>,
+        > = BTreeMap::new();
+
+        //Primary Key, Unique and Index names have to be globally unique
+        //Additionally, within a table they cannot conflict with Foreign Key names
+
+        for model in schema.models() {
+            if let Some(name) = model.primary_key.as_ref().and_then(|pk| pk.db_name.as_ref()) {
+                let entry = potential_name_space_violations
+                    .entry((name, ConstraintViolationScope::GlobalPrimaryKeyKeyIndex))
+                    .or_insert_with(Vec::new);
+
+                entry.push((&model.name, ConstraintType::PrimaryKey));
+
+                let entry = potential_name_space_violations
+                    .entry((
+                        name,
+                        ConstraintViolationScope::ModelPrimaryKeyKeyIndexForeignKey(&model.name),
+                    ))
+                    .or_insert_with(Vec::new);
+
+                entry.push((&model.name, ConstraintType::PrimaryKey));
+            }
+
+            for name in model
+                .relation_fields()
+                .filter_map(|rf| rf.relation_info.fk_name.as_ref())
+            {
+                let entry = potential_name_space_violations
+                    .entry((
+                        name,
+                        ConstraintViolationScope::ModelPrimaryKeyKeyIndexForeignKey(&model.name),
+                    ))
+                    .or_insert_with(Vec::new);
+
+                entry.push((&model.name, ConstraintType::ForeignKey));
+            }
+
+            for name in model.indices.iter().filter_map(|i| i.db_name.as_ref()) {
+                let entry = potential_name_space_violations
+                    .entry((name, ConstraintViolationScope::GlobalPrimaryKeyKeyIndex))
+                    .or_insert_with(Vec::new);
+
+                entry.push((&model.name, ConstraintType::KeyOrIdx));
+
+                let entry = potential_name_space_violations
+                    .entry((
+                        name,
+                        ConstraintViolationScope::ModelPrimaryKeyKeyIndexForeignKey(&model.name),
+                    ))
+                    .or_insert_with(Vec::new);
+
+                entry.push((&model.name, ConstraintType::KeyOrIdx));
+            }
+        }
+
+        ConstraintNameSpace::flatten(potential_name_space_violations)
     }
 
     fn available_native_type_constructors(&self) -> &[NativeTypeConstructor] {
@@ -353,7 +425,7 @@ impl Connector for PostgresDatamodelConnector {
         if let Some(constructor) = self.find_native_type_constructor(constructor_name) {
             Ok(NativeTypeInstance::new(constructor.name.as_str(), args, &native_type))
         } else {
-            self.native_str_error(constructor_name).native_type_name_unknown()
+            Err(self.native_str_error(constructor_name).native_type_name_unknown())
         }
     }
 
@@ -363,11 +435,5 @@ impl Connector for PostgresDatamodelConnector {
         }
 
         Ok(())
-    }
-}
-
-impl Default for PostgresDatamodelConnector {
-    fn default() -> Self {
-        Self::new()
     }
 }

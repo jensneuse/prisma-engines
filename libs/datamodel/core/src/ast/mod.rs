@@ -6,6 +6,7 @@
 mod argument;
 mod attribute;
 mod comment;
+mod composite_type;
 mod r#enum;
 mod expression;
 mod field;
@@ -22,22 +23,23 @@ mod traits;
 
 pub mod reformat;
 
-pub use argument::Argument;
-pub use attribute::Attribute;
-pub use comment::Comment;
-pub use expression::Expression;
-pub use field::{Field, FieldArity, FieldType};
-pub use generator_config::GeneratorConfig;
-pub use identifier::Identifier;
-pub use r#enum::{Enum, EnumValue};
-pub use source_config::SourceConfig;
 pub use span::Span;
-pub use top::Top;
-pub use traits::{ArgumentContainer, WithAttributes, WithDocumentation, WithIdentifier, WithName, WithSpan};
 
+pub(crate) use argument::Argument;
+pub(crate) use attribute::Attribute;
+pub(crate) use comment::Comment;
+pub(crate) use composite_type::{CompositeType, CompositeTypeId};
+pub(crate) use expression::Expression;
+pub(crate) use field::{Field, FieldArity, FieldType};
+pub(crate) use generator_config::GeneratorConfig;
+pub(crate) use identifier::Identifier;
 pub(crate) use model::{FieldId, Model};
 pub(crate) use parser::parse_schema;
+pub(crate) use r#enum::{Enum, EnumValue};
 pub(crate) use renderer::Renderer;
+pub(crate) use source_config::SourceConfig;
+pub(crate) use top::Top;
+pub(crate) use traits::{WithAttributes, WithDocumentation, WithIdentifier, WithName, WithSpan};
 
 /// AST representation of a prisma schema.
 ///
@@ -48,13 +50,14 @@ pub(crate) use renderer::Renderer;
 /// annotated with its location in the text representation.
 /// Basically, the AST is an object oriented representation of the datamodel's text.
 /// Schema = Datamodel + Generators + Datasources
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct SchemaAst {
     /// All models, enums, datasources, generators or type aliases
     pub(super) tops: Vec<Top>,
 }
 
 impl SchemaAst {
+    /// Construct an empty Schema AST.
     pub fn empty() -> Self {
         SchemaAst { tops: Vec::new() }
     }
@@ -62,11 +65,6 @@ impl SchemaAst {
     // Deprecated. Use ParserDatabase instead where possible.
     pub(crate) fn find_model(&self, model: &str) -> Option<&Model> {
         self.iter_models().find(|(_, m)| m.name.name == model).map(|(_, m)| m)
-    }
-
-    // Deprecated. Use ParserDatabase instead where possible.
-    pub(crate) fn find_field(&self, model: &str, field: &str) -> Option<&Field> {
-        self.find_model(model)?.fields.iter().find(|f| f.name.name == field)
     }
 
     pub(crate) fn iter_models(&self) -> impl Iterator<Item = (ModelId, &Model)> {
@@ -84,6 +82,7 @@ impl SchemaAst {
                 Top::Source(_) => TopId::Source(SourceId(top_idx as u32)),
                 Top::Generator(_) => TopId::Generator(GeneratorId(top_idx as u32)),
                 Top::Type(_) => TopId::Alias(AliasId(top_idx as u32)),
+                Top::CompositeType(_) => TopId::CompositeType(CompositeTypeId(top_idx as u32)),
             };
 
             (top_id, top)
@@ -103,6 +102,13 @@ impl SchemaAst {
 /// `schema[model_id]` syntax to resolve the id to an `ast::Model`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ModelId(u32);
+
+impl ModelId {
+    /// Used for range bounds when iterating over BTrees.
+    pub(crate) const ZERO: ModelId = ModelId(0);
+    /// Used for range bounds when iterating over BTrees.
+    pub(crate) const MAX: ModelId = ModelId(u32::MAX);
+}
 
 impl std::ops::Index<ModelId> for SchemaAst {
     type Output = Model;
@@ -149,6 +155,7 @@ pub(crate) struct SourceId(u32);
 /// syntax to resolve the id to an `ast::Top`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum TopId {
+    CompositeType(CompositeTypeId),
     Model(ModelId),
     Enum(EnumId),
     Alias(AliasId),
@@ -163,6 +170,13 @@ impl TopId {
             _ => None,
         }
     }
+
+    pub(crate) fn as_composite_type_id(&self) -> Option<CompositeTypeId> {
+        match self {
+            TopId::CompositeType(ctid) => Some(*ctid),
+            _ => None,
+        }
+    }
 }
 
 impl std::ops::Index<TopId> for SchemaAst {
@@ -170,9 +184,10 @@ impl std::ops::Index<TopId> for SchemaAst {
 
     fn index(&self, index: TopId) -> &Self::Output {
         let idx = match index {
-            TopId::Model(ModelId(idx)) => idx,
-            TopId::Enum(EnumId(idx)) => idx,
+            TopId::CompositeType(CompositeTypeId(idx)) => idx,
             TopId::Alias(AliasId(idx)) => idx,
+            TopId::Enum(EnumId(idx)) => idx,
+            TopId::Model(ModelId(idx)) => idx,
             TopId::Generator(GeneratorId(idx)) => idx,
             TopId::Source(SourceId(idx)) => idx,
         };

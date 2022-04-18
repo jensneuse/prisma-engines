@@ -15,7 +15,6 @@ use crate::{
     SqlFlavour, SqlSchema,
 };
 use column::ColumnTypeChange;
-use datamodel::common::preview_features::PreviewFeature;
 use enums::EnumDiffer;
 use sql_schema_describer::{
     walkers::{EnumWalker, ForeignKeyWalker, SqlSchemaExt, TableWalker},
@@ -44,7 +43,7 @@ pub(crate) fn calculate_steps(schemas: Pair<&SqlSchema>, flavour: &dyn SqlFlavou
 pub(crate) struct SqlSchemaDiffer<'a> {
     schemas: Pair<&'a SqlSchema>,
     db: DifferDatabase<'a>,
-    pub(super) tables_to_redefine: HashSet<String>,
+    tables_to_redefine: HashSet<String>,
 }
 
 impl<'schema> SqlSchemaDiffer<'schema> {
@@ -121,6 +120,11 @@ impl<'schema> SqlSchemaDiffer<'schema> {
         for table in tables {
             // Foreign keys
             for created_fk in table.created_foreign_keys() {
+                // these are already created when we redefine the other table
+                if self.tables_to_redefine.contains(created_fk.referenced_table().name()) {
+                    continue;
+                }
+
                 steps.push(SqlMigrationStep::AddForeignKey {
                     table_id: created_fk.table().table_id(),
                     foreign_key_index: created_fk.foreign_key_index(),
@@ -134,7 +138,36 @@ impl<'schema> SqlSchemaDiffer<'schema> {
                 })
             }
 
-            // Indexes
+            for fks in table.foreign_key_pairs() {
+                if self.db.flavour.has_unnamed_foreign_keys() {
+                    break;
+                }
+
+                if fks
+                    .map(|fk| fk.constraint_name())
+                    .transpose()
+                    .map(|names| names.previous() != names.next())
+                    .unwrap_or(false)
+                {
+                    if self.db.flavour.can_rename_foreign_key() {
+                        steps.push(SqlMigrationStep::RenameForeignKey {
+                            table_id: table.tables.map(|t| t.table_id()),
+                            foreign_key_id: fks.map(|fk| fk.foreign_key_index()),
+                        })
+                    } else {
+                        steps.push(SqlMigrationStep::AddForeignKey {
+                            table_id: table.next().table_id(),
+                            foreign_key_index: fks.next().foreign_key_index(),
+                        });
+                        steps.push(SqlMigrationStep::DropForeignKey {
+                            table_id: table.previous().table_id(),
+                            foreign_key_index: fks.previous().foreign_key_index(),
+                        })
+                    }
+                }
+            }
+
+            // Indexes.
             for i in table
                 .index_pairs()
                 .filter(|pair| self.db.flavour.index_should_be_renamed(pair))
@@ -142,8 +175,8 @@ impl<'schema> SqlSchemaDiffer<'schema> {
                 let table: Pair<TableId> = table.tables.map(|t| t.table_id());
                 let index: Pair<usize> = i.map(|i| i.index());
 
-                let step = if self.db.flavour.can_alter_index() {
-                    SqlMigrationStep::AlterIndex { table, index }
+                let step = if self.db.flavour.can_rename_index() {
+                    SqlMigrationStep::RenameIndex { table, index }
                 } else {
                     SqlMigrationStep::RedefineIndex { table, index }
                 };
@@ -154,6 +187,7 @@ impl<'schema> SqlSchemaDiffer<'schema> {
             // Order matters.
             let changes: Vec<TableChange> = SqlSchemaDiffer::drop_primary_key(&table)
                 .into_iter()
+                .chain(self.rename_primary_key(&table))
                 .chain(SqlSchemaDiffer::drop_columns(&table))
                 .chain(SqlSchemaDiffer::add_columns(&table))
                 .chain(SqlSchemaDiffer::alter_columns(&table).into_iter())
@@ -289,6 +323,15 @@ impl<'schema> SqlSchemaDiffer<'schema> {
         } else {
             from_psl_change
         }
+    }
+
+    fn rename_primary_key(&self, differ: &TableDiffer<'_, '_>) -> Option<TableChange> {
+        differ
+            .tables
+            .map(|pk| pk.primary_key().and_then(|pk| pk.constraint_name.as_ref()))
+            .transpose()
+            .filter(|names| names.previous != names.next)
+            .map(|_| TableChange::RenamePrimaryKey)
     }
 
     fn push_create_indexes(&self, steps: &mut Vec<SqlMigrationStep>) {
@@ -447,8 +490,8 @@ impl<'schema> SqlSchemaDiffer<'schema> {
     }
 }
 
-/// Compare two [ForeignKey](/sql-schema-describer/struct.ForeignKey.html)s and return whether they
-/// should be considered equivalent for schema diffing purposes.
+/// Compare two foreign keys and return whether they should be considered
+/// equivalent for schema diffing purposes.
 fn foreign_keys_match(fks: Pair<&ForeignKeyWalker<'_>>, db: &DifferDatabase<'_>) -> bool {
     let references_same_table = db.flavour.table_names_match(fks.map(|fk| fk.referenced_table().name()));
 
@@ -473,24 +516,16 @@ fn foreign_keys_match(fks: Pair<&ForeignKeyWalker<'_>>, db: &DifferDatabase<'_>)
         .interleave(|fk| fk.referenced_column_names())
         .all(|pair| pair.previous == pair.next);
 
-    let matches = references_same_table
+    let same_on_delete_action = fks.previous.on_delete_action() == fks.next.on_delete_action();
+    let same_on_update_action = fks.previous.on_update_action() == fks.next.on_update_action();
+
+    references_same_table
         && references_same_column_count
         && constrains_same_column_count
         && constrains_same_columns
-        && references_same_columns;
-
-    if db
-        .flavour
-        .preview_features()
-        .contains(PreviewFeature::ReferentialActions)
-    {
-        let same_on_delete_action = fks.previous.on_delete_action() == fks.next.on_delete_action();
-        let same_on_update_action = fks.previous.on_update_action() == fks.next.on_update_action();
-
-        matches && same_on_delete_action && same_on_update_action
-    } else {
-        matches
-    }
+        && references_same_columns
+        && same_on_delete_action
+        && same_on_update_action
 }
 
 fn enums_match(previous: &EnumWalker<'_>, next: &EnumWalker<'_>) -> bool {

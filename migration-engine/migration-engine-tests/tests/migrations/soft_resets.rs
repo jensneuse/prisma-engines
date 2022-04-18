@@ -50,7 +50,7 @@ fn soft_resets_work_on_postgres(api: TestApi) {
 
     // Check that the soft reset works with migrations, then with schema push.
     {
-        let engine = api.new_engine_with_connection_strings(&test_user_connection_string, None);
+        let engine = api.new_engine_with_connection_strings(test_user_connection_string, None);
 
         engine
             .apply_migrations(&migrations_directory)
@@ -73,11 +73,7 @@ fn soft_resets_work_on_postgres(api: TestApi) {
         engine.reset().send_sync();
         engine.assert_schema().assert_tables_count(0);
 
-        engine
-            .schema_push(dm)
-            .send()
-            .assert_has_executed_steps()
-            .assert_green_bang();
+        engine.schema_push(dm).send().assert_has_executed_steps().assert_green();
 
         engine.assert_schema().assert_tables_count(1).assert_has_table("Cat");
 
@@ -92,18 +88,20 @@ fn soft_resets_work_on_sql_server(api: TestApi) {
 
     let mut url: JdbcString = format!("jdbc:{}", api.connection_string()).parse().unwrap();
 
-    let dm = r#"
+    let dm = api.datamodel_with_provider(
+        r#"
         model Cat {
             id Int @id
             litterConsumption Int
             hungry Boolean @default(true)
         }
-    "#;
+    "#,
+    );
 
     // Create the database, a first migration and the test user.
     {
         api.new_engine()
-            .create_migration("01init", dm, &migrations_directory)
+            .create_migration("01init", &dm, &migrations_directory)
             .send_sync();
 
         let create_database = r#"
@@ -159,7 +157,7 @@ fn soft_resets_work_on_sql_server(api: TestApi) {
 
     // Check that the soft reset works with migrations, then with schema push.
     {
-        let engine = api.new_engine_with_connection_strings(&test_user_connection_string, None);
+        let engine = api.new_engine_with_connection_strings(test_user_connection_string, None);
 
         let create_schema = format!("CREATE SCHEMA [{}];", engine.schema_name());
         engine.raw_cmd(&create_schema);
@@ -197,11 +195,7 @@ fn soft_resets_work_on_sql_server(api: TestApi) {
         engine.reset().send_sync();
         engine.assert_schema().assert_tables_count(0);
 
-        engine
-            .schema_push(dm)
-            .send()
-            .assert_has_executed_steps()
-            .assert_green_bang();
+        engine.schema_push(dm).send().assert_has_executed_steps().assert_green();
 
         engine.assert_schema().assert_tables_count(1).assert_has_table("Cat");
 
@@ -279,16 +273,12 @@ fn soft_resets_work_on_mysql(api: TestApi) {
 
     // Check that the soft reset works with migrations, then with schema push.
     {
-        let engine = api.new_engine_with_connection_strings(&test_user_connection_string, None);
+        let engine = api.new_engine_with_connection_strings(test_user_connection_string, None);
 
         engine.reset().send_sync();
         engine.assert_schema().assert_tables_count(0);
 
-        engine
-            .schema_push(dm)
-            .send()
-            .assert_has_executed_steps()
-            .assert_green_bang();
+        engine.schema_push(dm).send().assert_has_executed_steps().assert_green();
 
         engine.assert_schema().assert_tables_count(1).assert_has_table("Cat");
 

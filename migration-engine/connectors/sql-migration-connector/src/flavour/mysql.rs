@@ -1,8 +1,7 @@
 use super::SqlFlavour;
 use crate::{
-    connect,
-    connection_wrapper::Connection,
-    error::{quaint_error_to_connector_error, SystemDatabase},
+    connection_wrapper::{connect, quaint_error_to_connector_error, Connection},
+    error::SystemDatabase,
     SqlMigrationConnector,
 };
 use datamodel::{common::preview_features::PreviewFeature, walkers::walk_scalar_fields, Datamodel};
@@ -15,7 +14,7 @@ use quaint::connector::{
     MysqlUrl,
 };
 use regex::{Regex, RegexSet};
-use sql_schema_describer::{DescriberErrorKind, SqlSchema, SqlSchemaDescriberBackend};
+use sql_schema_describer::SqlSchema;
 use std::sync::atomic::{AtomicU8, Ordering};
 use url::Url;
 use user_facing_errors::{
@@ -83,7 +82,7 @@ impl MysqlFlavour {
             let shadow_conninfo = conn.connection_info();
             let main_conninfo = main_connection.connection_info();
 
-            super::validate_connection_infos_do_not_match((&shadow_conninfo, &main_conninfo))?;
+            super::validate_connection_infos_do_not_match((shadow_conninfo, main_conninfo))?;
 
             tracing::info!(
                 "Connecting to user-provided shadow database at {}.{:?}",
@@ -145,7 +144,7 @@ impl SqlFlavour for MysqlFlavour {
     async fn run_query_script(&self, sql: &str, connection: &Connection) -> ConnectorResult<()> {
         let convert_error = |error: my::Error| match self.convert_server_error(&error) {
             Some(e) => ConnectorError::from(e),
-            None => quaint_error_to_connector_error(quaint::error::Error::from(error), &connection.connection_info()),
+            None => quaint_error_to_connector_error(quaint::error::Error::from(error), connection.connection_info()),
         };
 
         let (client, _url) = connection.unwrap_mysql();
@@ -290,20 +289,6 @@ impl SqlFlavour for MysqlFlavour {
         Ok(self.run_query_script(sql, connection).await?)
     }
 
-    async fn describe_schema<'a>(&'a self, connection: &Connection) -> ConnectorResult<SqlSchema> {
-        sql_schema_describer::mysql::SqlSchemaDescriber::new(connection.queryable())
-            .describe(connection.connection_info().schema_name())
-            .await
-            .map_err(|err| match err.into_kind() {
-                DescriberErrorKind::QuaintError(err) => {
-                    quaint_error_to_connector_error(err, &connection.connection_info())
-                }
-                DescriberErrorKind::CrossSchemaReference { .. } => {
-                    unreachable!("No schemas in MySQL")
-                }
-            })
-    }
-
     async fn drop_database(&self, database_url: &str) -> ConnectorResult<()> {
         let connection = connect(database_url).await?;
         let connection_info = connection.connection_info();
@@ -331,7 +316,7 @@ impl SqlFlavour for MysqlFlavour {
             .unwrap()
         });
 
-        let db_name = connection.schema_name();
+        let db_name = connection.connection_info().schema_name();
 
         if MYSQL_SYSTEM_DATABASES.is_match(db_name) {
             return Err(SystemDatabase(db_name.to_owned()).into());
@@ -467,7 +452,7 @@ impl SqlFlavour for MysqlFlavour {
                     })?;
             }
 
-            self.describe_schema(&temp_database).await
+            temp_database.describe_schema().await
         })()
         .await;
 
@@ -483,7 +468,7 @@ impl SqlFlavour for MysqlFlavour {
 #[enumflags2::bitflags]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
-pub enum Circumstances {
+pub(crate) enum Circumstances {
     LowerCasesTableNames,
     IsMysql56,
     IsMariadb,

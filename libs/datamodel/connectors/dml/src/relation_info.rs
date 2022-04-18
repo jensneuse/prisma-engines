@@ -12,15 +12,14 @@ pub struct RelationInfo {
     pub references: Vec<String>,
     /// The name of the relation. Internally, an empty string signals no name.
     pub name: String,
+    /// Foreign Key Constraint Name if there is one
+    pub fk_name: Option<String>,
     /// A strategy indicating what happens when
     /// a related node is deleted.
     pub on_delete: Option<ReferentialAction>,
     /// A strategy indicating what happens when
     /// a related node is updated.
     pub on_update: Option<ReferentialAction>,
-    /// Set true if referential actions feature is not in use.
-    /// This prevents the datamodel validator nagging about the missing preview feature, when automatically setting the values.
-    pub legacy_referential_actions: bool,
 }
 
 impl PartialEq for RelationInfo {
@@ -39,16 +38,10 @@ impl RelationInfo {
             fields: Vec::new(),
             references: Vec::new(),
             name: String::new(),
+            fk_name: None,
             on_delete: None,
             on_update: None,
-            legacy_referential_actions: false,
         }
-    }
-
-    /// Set referential action legacy mode, skipping the validation errors on
-    /// automatically set actions.
-    pub fn legacy_referential_actions(&mut self) {
-        self.legacy_referential_actions = true;
     }
 }
 
@@ -91,5 +84,12 @@ impl fmt::Display for ReferentialAction {
             ReferentialAction::SetNull => write!(f, "SetNull"),
             ReferentialAction::SetDefault => write!(f, "SetDefault"),
         }
+    }
+}
+
+impl ReferentialAction {
+    // True, if the action modifies the related items.
+    pub fn triggers_modification(self) -> bool {
+        !matches!(self, Self::NoAction | Self::Restrict)
     }
 }

@@ -1,9 +1,11 @@
-use super::*;
+//! A field in a model.
+
 use crate::native_type_instance::NativeTypeInstance;
+use crate::relation_info::RelationInfo;
 use crate::scalars::ScalarType;
 use crate::traits::{Ignorable, WithDatabaseName, WithName};
 use crate::{
-    default_value::{DefaultValue, ValueGenerator},
+    default_value::{DefaultKind, DefaultValue, ValueGenerator},
     relation_info::ReferentialAction,
 };
 use std::hash::Hash;
@@ -41,6 +43,8 @@ pub enum FieldType {
     Unsupported(String),
     /// The first option is Some(x) if the scalar type is based upon a type alias.
     Scalar(ScalarType, Option<String>, Option<NativeTypeInstance>),
+    /// This is a composite type fields, with a composite type of the given type.
+    CompositeType(String),
 }
 
 impl FieldType {
@@ -97,6 +101,7 @@ impl FieldType {
 pub enum Field {
     ScalarField(ScalarField),
     RelationField(RelationField),
+    CompositeField(CompositeField),
 }
 
 impl Field {
@@ -133,6 +138,7 @@ impl Field {
         match &self {
             Field::ScalarField(sf) => &sf.name,
             Field::RelationField(rf) => &rf.name,
+            Field::CompositeField(cf) => &cf.name,
         }
     }
 
@@ -140,6 +146,7 @@ impl Field {
         match self {
             Field::ScalarField(sf) => sf.documentation.as_deref(),
             Field::RelationField(rf) => rf.documentation.as_deref(),
+            Field::CompositeField(cf) => cf.documentation.as_deref(),
         }
     }
 
@@ -147,6 +154,7 @@ impl Field {
         match self {
             Field::ScalarField(sf) => sf.documentation = documentation,
             Field::RelationField(rf) => rf.documentation = documentation,
+            Field::CompositeField(cf) => cf.documentation = documentation,
         }
     }
 
@@ -154,6 +162,7 @@ impl Field {
         match self {
             Field::ScalarField(sf) => sf.is_commented_out,
             Field::RelationField(rf) => rf.is_commented_out,
+            Field::CompositeField(cf) => cf.is_commented_out,
         }
     }
 
@@ -161,6 +170,7 @@ impl Field {
         match &self {
             Field::ScalarField(sf) => &sf.arity,
             Field::RelationField(rf) => &rf.arity,
+            Field::CompositeField(rf) => &rf.arity,
         }
     }
 
@@ -168,6 +178,7 @@ impl Field {
         match &self {
             Field::ScalarField(sf) => sf.field_type.clone(),
             Field::RelationField(rf) => FieldType::Relation(rf.relation_info.clone()),
+            Field::CompositeField(cf) => FieldType::CompositeType(cf.composite_type.clone()),
         }
     }
 
@@ -175,6 +186,7 @@ impl Field {
         match &self {
             Field::ScalarField(sf) => sf.default_value.as_ref(),
             Field::RelationField(_) => None,
+            Field::CompositeField(_) => None,
         }
     }
 
@@ -182,20 +194,7 @@ impl Field {
         match &self {
             Field::ScalarField(sf) => sf.is_updated_at,
             Field::RelationField(_) => false,
-        }
-    }
-
-    pub fn is_unique(&self) -> bool {
-        match &self {
-            Field::ScalarField(sf) => sf.is_unique,
-            Field::RelationField(_) => false,
-        }
-    }
-
-    pub fn is_id(&self) -> bool {
-        match &self {
-            Field::ScalarField(sf) => sf.is_id,
-            Field::RelationField(_) => false,
+            Field::CompositeField(_) => false,
         }
     }
 
@@ -203,6 +202,7 @@ impl Field {
         match &self {
             Field::ScalarField(sf) => sf.is_generated,
             Field::RelationField(rf) => rf.is_generated,
+            Field::CompositeField(_) => false,
         }
     }
 }
@@ -212,12 +212,14 @@ impl WithName for Field {
         match self {
             Field::ScalarField(sf) => sf.name(),
             Field::RelationField(rf) => rf.name(),
+            Field::CompositeField(cf) => cf.name(),
         }
     }
     fn set_name(&mut self, name: &str) {
         match self {
             Field::ScalarField(sf) => sf.set_name(name),
             Field::RelationField(rf) => rf.set_name(name),
+            Field::CompositeField(cf) => cf.set_name(name),
         }
     }
 }
@@ -226,6 +228,7 @@ impl WithDatabaseName for Field {
     fn database_name(&self) -> Option<&str> {
         match self {
             Field::ScalarField(sf) => sf.database_name.as_deref(),
+            Field::CompositeField(cf) => cf.database_name.as_deref(),
             Field::RelationField(_) => None,
         }
     }
@@ -233,7 +236,26 @@ impl WithDatabaseName for Field {
     fn set_database_name(&mut self, database_name: Option<String>) {
         match self {
             Field::ScalarField(sf) => sf.set_database_name(database_name),
+            Field::CompositeField(cf) => cf.set_database_name(database_name),
             Field::RelationField(_) => (),
+        }
+    }
+}
+
+impl Ignorable for Field {
+    fn is_ignored(&self) -> bool {
+        match self {
+            Field::RelationField(rf) => rf.is_ignored,
+            Field::ScalarField(sf) => sf.is_ignored,
+            Field::CompositeField(cf) => cf.is_ignored,
+        }
+    }
+
+    fn ignore(&mut self) {
+        match self {
+            Field::RelationField(rf) => rf.is_ignored = true,
+            Field::ScalarField(sf) => sf.is_ignored = true,
+            Field::CompositeField(cf) => cf.is_ignored = true,
         }
     }
 }
@@ -388,9 +410,18 @@ impl RelationField {
 
         match self.referential_arity {
             _ if !self.emulates_referential_actions.unwrap_or(false) => Cascade,
-            FieldArity::Required => Restrict,
+            FieldArity::Required => NoAction,
             _ => SetNull,
         }
+    }
+}
+
+impl WithName for RelationField {
+    fn name(&self) -> &String {
+        &self.name
+    }
+    fn set_name(&mut self, name: &str) {
+        self.name = String::from(name)
     }
 }
 
@@ -411,12 +442,6 @@ pub struct ScalarField {
 
     /// The default value.
     pub default_value: Option<DefaultValue>,
-
-    /// Indicates if the field is unique.
-    pub is_unique: bool,
-
-    /// true if this field marked with @id.
-    pub is_id: bool,
 
     /// Comments associated with this field.
     pub documentation: Option<String>,
@@ -444,8 +469,6 @@ impl ScalarField {
             field_type,
             database_name: None,
             default_value: None,
-            is_unique: false,
-            is_id: false,
             documentation: None,
             is_generated: false,
             is_updated_at: false,
@@ -453,12 +476,17 @@ impl ScalarField {
             is_ignored: false,
         }
     }
+
     /// Creates a new field with the given name and type, marked as generated and optional.
     pub fn new_generated(name: &str, field_type: FieldType) -> ScalarField {
         let mut field = Self::new(name, FieldArity::Optional, field_type);
         field.is_generated = true;
 
         field
+    }
+
+    pub fn set_default_value(&mut self, val: DefaultValue) {
+        self.default_value = Some(val)
     }
 
     //todo use withdatabasename::final_database_name instead
@@ -483,20 +511,16 @@ impl ScalarField {
     }
 
     pub fn is_auto_increment(&self) -> bool {
-        matches!(&self.default_value, Some(DefaultValue::Expression(expr)) if expr == &ValueGenerator::new_autoincrement())
+        let kind = self.default_value().map(|val| val.kind());
+        matches!(kind, Some(DefaultKind::Expression(ref expr)) if expr == &ValueGenerator::new_autoincrement())
+    }
+
+    pub fn default_value(&self) -> Option<&DefaultValue> {
+        self.default_value.as_ref()
     }
 }
 
 impl WithName for ScalarField {
-    fn name(&self) -> &String {
-        &self.name
-    }
-    fn set_name(&mut self, name: &str) {
-        self.name = String::from(name)
-    }
-}
-
-impl WithName for RelationField {
     fn name(&self) -> &String {
         &self.name
     }
@@ -514,18 +538,65 @@ impl WithDatabaseName for ScalarField {
     }
 }
 
-impl Ignorable for Field {
-    fn is_ignored(&self) -> bool {
-        match self {
-            Field::RelationField(rf) => rf.is_ignored,
-            Field::ScalarField(sf) => sf.is_ignored,
+/// Represents a composite field.
+#[derive(Debug, PartialEq, Clone)]
+pub struct CompositeField {
+    /// Name of the field.
+    pub name: String,
+
+    /// The database internal name.
+    pub database_name: Option<String>,
+
+    /// The name of the composite type that backs this field.
+    pub composite_type: String,
+
+    /// The field's arity.
+    pub arity: FieldArity,
+
+    /// Comments associated with this field.
+    pub documentation: Option<String>,
+
+    /// Indicates if this field has to be commented out.
+    pub is_commented_out: bool,
+
+    /// Indicates if this field has to be ignored by the Client.
+    pub is_ignored: bool,
+}
+
+impl CompositeField {
+    pub fn new() -> Self {
+        CompositeField {
+            name: String::new(),
+            database_name: None,
+            composite_type: String::new(),
+            arity: FieldArity::Optional,
+            documentation: None,
+            is_commented_out: false,
+            is_ignored: false,
         }
     }
+}
 
-    fn ignore(&mut self) {
-        match self {
-            Field::RelationField(rf) => rf.is_ignored = true,
-            Field::ScalarField(sf) => sf.is_ignored = true,
-        }
+impl Default for CompositeField {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WithName for CompositeField {
+    fn name(&self) -> &String {
+        &self.name
+    }
+    fn set_name(&mut self, name: &str) {
+        self.name = String::from(name)
+    }
+}
+
+impl WithDatabaseName for CompositeField {
+    fn database_name(&self) -> Option<&str> {
+        self.database_name.as_deref()
+    }
+    fn set_database_name(&mut self, database_name: Option<String>) {
+        self.database_name = database_name;
     }
 }

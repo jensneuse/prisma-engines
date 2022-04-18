@@ -10,14 +10,14 @@ Migrate](https://www.prisma.io/migrate).
 
 The engines and their respective binary crates are:
 - Query engine: `query-engine`
-- Migration engine: `migration-engine`
+- Migration engine: `migration-engine-cli`
 - Introspection engine: `introspection-engine`
 - Prisma Format: `prisma-fmt`
 
 ## Building Prisma Engines
 
 **Prerequisites:**
-- Installed the stable Rust toolchain, at least version 1.48.0. You can get the
+- Installed the stable Rust toolchain, at least version 1.52.0. You can get the
   toolchain at [rustup](https://rustup.rs/) or the package manager of your
   choice.
 - Linux only: OpenSSL is required to be installed.
@@ -162,11 +162,11 @@ To actually get the tests working, read the contents of `.envrc`. Then `Edit
 environment variables for your account` from Windows settings, and add at least
 the correct values for the following variables:
 
-- `SERVER ROOT` should point to the root directory of `prisma-engines` project.
+- `WORKSPACE_ROOT` should point to the root directory of `prisma-engines` project.
 - `PRISMA_BINARY_PATH` is usually
-  `%SERVER_ROOT%\target\release\query-engine.exe`.
+  `%WORKSPACE_ROOT%\target\release\query-engine.exe`.
 - `MIGRATION_ENGINE_BINARY_PATH` should be
-  `%SERVER_ROOT%\target\release\migration-engine.exe`.
+  `%WORKSPACE_ROOT%\target\release\migration-engine.exe`.
 
 Other variables may or may not be useful.
 
@@ -186,10 +186,6 @@ If you want to use the command line, start `sbt` in
 
 **Run:**
 Run `cargo test` in the repository root.
-
-## WIP Coding Guidelines
-- Prevent compiler warnings
-- Use Rust formatting (`cargo fmt`)
 
 ## Security
 

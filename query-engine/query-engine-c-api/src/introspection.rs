@@ -1,4 +1,4 @@
-use introspection_connector::{IntrospectionContext, ConnectorResult, DatabaseMetadata, IntrospectionConnector, IntrospectionResultOutput, ConnectorError, IntrospectionResult};
+use introspection_connector::{IntrospectionContext, ConnectorResult, DatabaseMetadata, IntrospectionConnector, IntrospectionResultOutput, ConnectorError, IntrospectionResult, CompositeTypeDepth};
 use serde_derive::*;
 use sql_introspection_connector::SqlIntrospectionConnector;
 use introspection_core::Error;
@@ -37,7 +37,7 @@ impl Introspection {
 
         let url = ds.load_url(load_env_var).unwrap();
 
-        let preview_features = config.subject.preview_features().map(Clone::clone).collect();
+        let preview_features = config.subject.preview_features();
 
         let connector = match SqlIntrospectionConnector::new(url.as_str(),preview_features).await {
             introspection_connector::ConnectorResult::Ok(connector) => connector,
@@ -47,8 +47,9 @@ impl Introspection {
         let datamodel = Datamodel::new();
 
         let ctx = IntrospectionContext {
-            preview_features: config.subject.preview_features().map(Clone::clone).collect(),
+            preview_features: config.subject.preview_features(),
             source: config.subject.datasources.into_iter().next().unwrap(),
+            composite_type_depth: CompositeTypeDepth::Level(3),
         };
 
         let result = match connector.introspect(&datamodel,ctx).await {
@@ -59,6 +60,7 @@ impl Introspection {
                     Result::Ok(datamodel::render_datamodel_and_config_to_string(&Datamodel {
                         models: introspection_result.data_model.models,
                         enums: introspection_result.data_model.enums,
+                        composite_types: introspection_result.data_model.composite_types,
                     }, &config2.subject))
                 }
             }

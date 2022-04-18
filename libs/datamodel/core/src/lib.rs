@@ -93,7 +93,7 @@ use diagnostics::Diagnostics;
 use enumflags2::BitFlags;
 use transform::{
     ast_to_dml::{DatasourceLoader, GeneratorLoader, ValidationPipeline},
-    dml_to_ast::{DatasourceSerializer, GeneratorSerializer, LowerDmlToAst},
+    dml_to_ast::{self, GeneratorSerializer, LowerDmlToAst},
 };
 
 /// Parse and validate the whole schema
@@ -139,9 +139,10 @@ fn parse_datamodel_internal(
     let generators = GeneratorLoader::load_generators_from_ast(&ast, &mut diagnostics);
     let preview_features = preview_features(&generators);
     let datasources = load_sources(&ast, preview_features, &mut diagnostics);
-    let validator = ValidationPipeline::new(&datasources, preview_features);
 
     diagnostics.to_result()?;
+
+    let validator = ValidationPipeline::new(&datasources, preview_features);
 
     match validator.validate(&ast, transform) {
         Ok(mut src) => {
@@ -200,9 +201,9 @@ fn load_sources(
 //
 
 /// Renders to a return string.
-pub fn render_datamodel_to_string(datamodel: &dml::Datamodel) -> String {
+pub fn render_datamodel_to_string(datamodel: &dml::Datamodel, configuration: Option<&Configuration>) -> String {
     let mut writable_string = String::with_capacity(datamodel.models.len() * 20);
-    render_datamodel_to(&mut writable_string, datamodel, None);
+    render_datamodel_to(&mut writable_string, datamodel, configuration);
     writable_string
 }
 
@@ -219,9 +220,27 @@ pub fn render_schema_ast_to_string(schema: &SchemaAst) -> String {
 pub fn render_datamodel_to(
     stream: &mut dyn std::fmt::Write,
     datamodel: &dml::Datamodel,
-    datasource: Option<&Datasource>,
+    configuration: Option<&Configuration>,
 ) {
-    let lowered = LowerDmlToAst::new(datasource, BitFlags::empty()).lower(datamodel);
+    let datasource = configuration.and_then(|c| c.datasources.first());
+
+    let preview_features = configuration
+        .map(|c| c.preview_features())
+        .unwrap_or_else(BitFlags::empty);
+
+    let lowered = LowerDmlToAst::new(datasource, preview_features).lower(datamodel);
+
+    render_schema_ast_to(stream, &lowered, 2);
+}
+
+/// Renders as a string into the stream.
+pub fn render_datamodel_to_with_preview_flags(
+    stream: &mut dyn std::fmt::Write,
+    datamodel: &dml::Datamodel,
+    datasource: Option<&Datasource>,
+    flags: BitFlags<PreviewFeature>,
+) {
+    let lowered = LowerDmlToAst::new(datasource, flags).lower(datamodel);
     render_schema_ast_to(stream, &lowered, 2);
 }
 
@@ -243,10 +262,9 @@ fn render_datamodel_and_config_to(
     datamodel: &dml::Datamodel,
     config: &configuration::Configuration,
 ) {
-    let features = config.preview_features().map(Clone::clone).collect();
-    let mut lowered = LowerDmlToAst::new(config.datasources.first(), features).lower(datamodel);
+    let mut lowered = LowerDmlToAst::new(config.datasources.first(), config.preview_features()).lower(datamodel);
 
-    DatasourceSerializer::add_sources_to_ast(config.datasources.as_slice(), &mut lowered);
+    dml_to_ast::add_sources_to_ast(config, &mut lowered);
     GeneratorSerializer::add_generators_to_ast(&config.generators, &mut lowered);
 
     render_schema_ast_to(stream, &lowered, 2);

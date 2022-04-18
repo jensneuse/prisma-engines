@@ -101,7 +101,7 @@ impl CliCommand {
             request.build_mode,
             request.enable_raw_queries,
             capabilities,
-            request.config.preview_features().cloned().collect(),
+            request.config.preview_features().iter().collect(),
         ));
 
         let dmmf = dmmf::render_dmmf(&request.datamodel, query_schema);
@@ -144,7 +144,7 @@ impl CliCommand {
         let cx = Arc::new(cx);
 
         let handler = GraphQlHandler::new(&*cx.executor, cx.query_schema());
-        let res = handler.handle(serde_json::from_str(&decoded_request)?).await;
+        let res = handler.handle(serde_json::from_str(&decoded_request)?, None).await;
         let res = serde_json::to_string(&res).unwrap();
 
         let encoded_response = base64::encode(&res);

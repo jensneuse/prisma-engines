@@ -53,13 +53,13 @@ pub struct SqlSchema {
     /// The schema's enums.
     pub enums: Vec<Enum>,
     /// The schema's sequences, unique to Postgres.
-    pub sequences: Vec<Sequence>,
+    sequences: Vec<Sequence>,
     /// The schema's views,
-    pub views: Vec<View>,
+    views: Vec<View>,
     /// The stored procedures.
-    pub procedures: Vec<Procedure>,
+    procedures: Vec<Procedure>,
     /// The user-defined types procedures.
-    pub user_defined_types: Vec<UserDefinedType>,
+    user_defined_types: Vec<UserDefinedType>,
 }
 
 impl SqlSchema {
@@ -205,9 +205,7 @@ impl Table {
 
     pub fn is_column_unique(&self, column_name: &str) -> bool {
         self.indices.iter().any(|index| {
-            index.tpe == IndexType::Unique
-                && index.columns.len() == 1
-                && index.columns.contains(&column_name.to_owned())
+            index.is_unique() && index.columns.len() == 1 && index.columns.contains(&column_name.to_owned())
         })
     }
 
@@ -555,6 +553,10 @@ impl DefaultValue {
 
     pub fn kind(&self) -> &DefaultKind {
         &self.kind
+    }
+
+    pub fn into_kind(self) -> DefaultKind {
+        self.kind
     }
 
     pub fn set_constraint_name(&mut self, name: impl ToString) {

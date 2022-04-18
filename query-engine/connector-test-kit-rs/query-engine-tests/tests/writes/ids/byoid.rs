@@ -46,9 +46,9 @@ mod byoid {
 
     // "A Create Mutation" should "create and return item with own Id"
     #[connector_test(schema(schema_1))]
-    async fn create_and_return_item_woi_1(runner: &Runner) -> TestResult<()> {
+    async fn create_and_return_item_woi_1(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: {p: "Parent", id: "Own Id"}){p, id}
           }"#),
           @r###"{"data":{"createOneParent":{"p":"Parent","id":"Own Id"}}}"###
@@ -61,7 +61,7 @@ mod byoid {
         };
 
         assert_error!(
-            runner,
+            &runner,
             r#"mutation {
               createOneParent(data: {p: "Parent2", id: "Own Id"}){p, id}
             }"#,
@@ -74,9 +74,9 @@ mod byoid {
 
     // "A Create Mutation" should "create and return item with own Id"
     #[connector_test(schema(schema_2))]
-    async fn create_and_return_item_woi_2(runner: &Runner) -> TestResult<()> {
+    async fn create_and_return_item_woi_2(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
                 createOneParent(data: {p: "Parent", id: "Own Id"}){p, id}
               }"#),
           @r###"{"data":{"createOneParent":{"p":"Parent","id":"Own Id"}}}"###
@@ -89,7 +89,7 @@ mod byoid {
         };
 
         assert_error!(
-            runner,
+            &runner,
             r#"mutation {
                   createOneParent(data: {p: "Parent2", id: "Own Id"}){p, id}
                 }"#,
@@ -101,38 +101,10 @@ mod byoid {
     }
 
     // "A Create Mutation" should "error for id that is invalid"
-    // FIXME: Does that make sense??
-    // #[connector_test(schema(schema_1))]
-    // async fn error_for_invalid_id_1_1(runner: &Runner) -> TestResult<()> {
-    //     insta::assert_snapshot!(
-    //       run_query!(runner, r#"mutation {
-    //         createOneParent(data: {p: "Parent", id: 12}){p, id}
-    //       }"#),
-    //       @r###"{"data":{"createOneParent":{"p":"Parent","id":"12"}}}"###
-    //     );
-
-    //     Ok(())
-    // }
-
-    // // "A Create Mutation" should "error for id that is invalid"
-    // // FIXME: Does that make sense??
-    // #[connector_test(schema(schema_2))]
-    // async fn error_for_invalid_id_1_2(runner: &Runner) -> TestResult<()> {
-    //     insta::assert_snapshot!(
-    //       run_query!(runner, r#"mutation {
-    //         createOneParent(data: {p: "Parent", id: 12}){p, id}
-    //       }"#),
-    //       @r###"{"data":{"createOneParent":{"p":"Parent","id":"12"}}}"###
-    //     );
-
-    //     Ok(())
-    // }
-
-    // "A Create Mutation" should "error for id that is invalid"
     #[connector_test(schema(schema_1))]
-    async fn error_for_invalid_id_2_1(runner: &Runner) -> TestResult<()> {
+    async fn error_for_invalid_id_2_1(runner: Runner) -> TestResult<()> {
         assert_error!(
-            runner,
+            &runner,
             r#"mutation {
               createOneParent(data: {p: "Parent", id: true}){p, id}
             }"#,
@@ -145,7 +117,7 @@ mod byoid {
 
     // "A Create Mutation" should "error for id that is invalid"
     #[connector_test(schema(schema_2))]
-    async fn error_for_invalid_id_2_2(runner: &Runner) -> TestResult<()> {
+    async fn error_for_invalid_id_2_2(runner: Runner) -> TestResult<()> {
         assert_error!(
                 runner,
                 r#"mutation {
@@ -158,45 +130,11 @@ mod byoid {
         Ok(())
     }
 
-    // "A Create Mutation" should "error for id that is invalid"
-    // TODO(dom): Actually works on MongoDb.
-    // Result: {"data":{"createOneParent":{"p":"Parent","id":"this is probably way to long, lets see what error it throws"}}}
-    #[connector_test(schema(schema_1), exclude(Sqlite, Postgres, Mysql, MongoDb, SqlServer))]
-    async fn error_for_invalid_id_3_1(runner: &Runner) -> TestResult<()> {
-        assert_error!(
-            runner,
-            r#"mutation {
-              createOneParent(data: {p: "Parent", id: "this is probably way to long, lets see what error it throws"}){p, id}
-            }"#,
-            3007,
-            "`Mutation.createOneParent.data.ParentCreateInput.id`: Value types mismatch. Have: Boolean(true), want: String"
-        );
-
-        Ok(())
-    }
-
-    // "A Create Mutation" should "error for id that is invalid"
-    // TODO(dom): Actually works on MongoDb.
-    // Result: {"data":{"createOneParent":{"p":"Parent","id":"this is probably way to long, lets see what error it throws"}}}
-    #[connector_test(schema(schema_2), exclude(Sqlite, Postgres, Mysql, MongoDb, SqlServer))]
-    async fn error_for_invalid_id_3_2(runner: &Runner) -> TestResult<()> {
-        assert_error!(
-                runner,
-                r#"mutation {
-                  createOneParent(data: {p: "Parent", id: "this is probably way to long, lets see what error it throws"}){p, id}
-                }"#,
-                3007,
-                "`Mutation.createOneParent.data.ParentCreateInput.id`: Value types mismatch. Have: Boolean(true), want: String"
-            );
-
-        Ok(())
-    }
-
     // "A Nested Create Mutation" should "create and return item with own Id"
     #[connector_test(schema(schema_1))]
-    async fn nested_create_return_item_woi_1(runner: &Runner) -> TestResult<()> {
+    async fn nested_create_return_item_woi_1(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: {p: "Parent", id: "Own Id", childOpt:{create:{c:"Child", id: "Own Child Id"}}}){p, id, childOpt { c, id} }
           }"#),
           @r###"{"data":{"createOneParent":{"p":"Parent","id":"Own Id","childOpt":{"c":"Child","id":"Own Child Id"}}}}"###
@@ -209,7 +147,7 @@ mod byoid {
         };
 
         assert_error!(
-            runner,
+            &runner,
             r#"mutation {
               createOneParent(data: {p: "Parent 2", id: "Own Id 2", childOpt:{create:{c:"Child 2", id: "Own Child Id"}}}){p, id, childOpt { c, id} }
             }"#,
@@ -222,9 +160,9 @@ mod byoid {
 
     // "A Nested Create Mutation" should "create and return item with own Id"
     #[connector_test(schema(schema_2))]
-    async fn nested_create_return_item_woi_2(runner: &Runner) -> TestResult<()> {
+    async fn nested_create_return_item_woi_2(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
                 createOneParent(data: {p: "Parent", id: "Own Id", childOpt:{create:{c:"Child", id: "Own Child Id"}}}){p, id, childOpt { c, id} }
               }"#),
           @r###"{"data":{"createOneParent":{"p":"Parent","id":"Own Id","childOpt":{"c":"Child","id":"Own Child Id"}}}}"###
@@ -237,7 +175,7 @@ mod byoid {
         };
 
         assert_error!(
-            runner,
+            &runner,
             r#"mutation {
                   createOneParent(data: {p: "Parent 2", id: "Own Id 2", childOpt:{create:{c:"Child 2", id: "Own Child Id"}}}){p, id, childOpt { c, id} }
                 }"#,
@@ -248,47 +186,11 @@ mod byoid {
         Ok(())
     }
 
-    // "A Nested Create Mutation" should "error with invalid id"
-    // TODO: Should we really validate this
-    // TODO(dom): Actually works on MongoDb.
-    // Result: {"data":{"createOneParent":{"p":"Parent","id":"this is probably way to long, lets see what error it throws"}}}
-    #[connector_test(schema(schema_1), exclude(Sqlite, Postgres, Mysql, MongoDb, SqlServer))]
-    async fn nested_create_invalid_id_1(runner: &Runner) -> TestResult<()> {
-        assert_error!(
-            runner,
-            r#"mutation {
-              createOneParent(data: {p: "Parent 2", id: "Own Id 2", childOpt:{create:{c:"Child 2", id: "This is way too long and should error"}}}){p, id, childOpt { c, id} }
-            }"#,
-            3007,
-            "Value for field id is too long."
-        );
-
-        Ok(())
-    }
-
-    // "A Nested Create Mutation" should "error with invalid id"
-    // TODO: Should we really validate this
-    // TODO(dom): Actually works on MongoDb.
-    // Result: {"data":{"createOneParent":{"p":"Parent","id":"this is probably way to long, lets see what error it throws"}}}
-    #[connector_test(schema(schema_2), exclude(Sqlite, Postgres, Mysql, MongoDb, SqlServer))]
-    async fn nested_create_invalid_id_2(runner: &Runner) -> TestResult<()> {
-        assert_error!(
-            runner,
-            r#"mutation {
-              createOneParent(data: {p: "Parent 2", id: "Own Id 2", childOpt:{create:{c:"Child 2", id: "This is way too long and should error"}}}){p, id, childOpt { c, id} }
-            }"#,
-            3007,
-            "Value for field id is too long."
-        );
-
-        Ok(())
-    }
-
     // "An Upsert Mutation" should "work"
     #[connector_test(schema(schema_1))]
-    async fn upsert_should_work_1(runner: &Runner) -> TestResult<()> {
+    async fn upsert_should_work_1(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             upsertOneParent(
                 where: {id: "Does not exist"}
                 create: {p: "Parent 2", id: "Own Id"}
@@ -304,9 +206,9 @@ mod byoid {
 
     // "An Upsert Mutation" should "work"
     #[connector_test(schema(schema_2))]
-    async fn upsert_should_work_2(runner: &Runner) -> TestResult<()> {
+    async fn upsert_should_work_2(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
                 upsertOneParent(
                     where: {id: "Does not exist"}
                     create: {p: "Parent 2", id: "Own Id"}
@@ -320,62 +222,18 @@ mod byoid {
         Ok(())
     }
 
-    // "An Upsert Mutation" should "error with id that is too long"
-    // TODO(dom): Actually works on MongoDb.
-    // Result: {"data":{"upsertOneParent":{"p":"Parent 2","id":"Way way too long for a proper id"}}}
-    #[connector_test(schema(schema_1), exclude(Sqlite, Postgres, Mysql, MongoDb, SqlServer))]
-    async fn upsert_error_with_id_too_long_1(runner: &Runner) -> TestResult<()> {
-        assert_error!(
-            runner,
-            r#"mutation {
-              upsertOneParent(
-                  where: {id: "Does not exist"}
-                  create: {p: "Parent 2", id: "Way way too long for a proper id"}
-                  update: {p: { set: "Parent 2" }}
-                  )
-                {p, id}
-              }"#,
-            3007,
-            "Value for field id is too long."
-        );
-
-        Ok(())
-    }
-
-    // "An Upsert Mutation" should "error with id that is too long"
-    // TODO(dom): Actually works on MongoDb.
-    // Result: {"data":{"upsertOneParent":{"p":"Parent 2","id":"Way way too long for a proper id"}}}
-    #[connector_test(schema(schema_2), exclude(Sqlite, Postgres, Mysql, MongoDb, SqlServer))]
-    async fn upsert_error_with_id_too_long_2(runner: &Runner) -> TestResult<()> {
-        assert_error!(
-            runner,
-            r#"mutation {
-                  upsertOneParent(
-                      where: {id: "Does not exist"}
-                      create: {p: "Parent 2", id: "Way way too long for a proper id"}
-                      update: {p: { set: "Parent 2" }}
-                      )
-                    {p, id}
-                  }"#,
-            3007,
-            "Value for field id is too long."
-        );
-
-        Ok(())
-    }
-
     // "An nested Upsert Mutation" should "work"
     #[connector_test(schema(schema_1))]
-    async fn nested_upsert_should_work_1(runner: &Runner) -> TestResult<()> {
+    async fn nested_upsert_should_work_1(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: {p: "Parent", id: "Own Id"}){p, id}
           }"#),
           @r###"{"data":{"createOneParent":{"p":"Parent","id":"Own Id"}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(
                 where: {id: "Own Id"}
                 data: {
@@ -395,16 +253,16 @@ mod byoid {
 
     // "An nested Upsert Mutation" should "work"
     #[connector_test(schema(schema_2))]
-    async fn nested_upsert_should_work_2(runner: &Runner) -> TestResult<()> {
+    async fn nested_upsert_should_work_2(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
                 createOneParent(data: {p: "Parent", id: "Own Id"}){p, id}
               }"#),
           @r###"{"data":{"createOneParent":{"p":"Parent","id":"Own Id"}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
                 updateOneParent(
                     where: {id: "Own Id"}
                     data: {
@@ -435,9 +293,9 @@ mod byoid {
 
     // "An id field with a custom name" should "work"
     #[connector_test(schema(schema_3))]
-    async fn id_field_custom_name_should_work(runner: &Runner) -> TestResult<()> {
+    async fn id_field_custom_name_should_work(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneBlog(data: {name: "MyBlog"}){ name }
           }"#),
           @r###"{"data":{"createOneBlog":{"name":"MyBlog"}}}"###

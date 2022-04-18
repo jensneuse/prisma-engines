@@ -1,7 +1,6 @@
-use migration_engine_tests::sync_test_api::*;
+use migration_engine_tests::test_api::*;
 use prisma_value::PrismaValue;
-use sql_schema_describer::DefaultValue;
-use test_macros::test_connector;
+use sql_schema_describer::{DefaultKind, DefaultValue};
 
 // MySQL 5.7 and MariaDB are skipped, because the datamodel parser gives us a
 // chrono DateTime, and we don't render that in the exact expected format.
@@ -14,12 +13,16 @@ fn datetime_defaults_work(api: TestApi) {
         }
     "#;
 
-    api.schema_push(dm).send().assert_green_bang();
+    api.schema_push_w_datasource(dm).send().assert_green();
 
-    let expected_default = if api.is_postgres() {
+    let expected_default = if api.is_cockroach() {
+        DefaultValue::db_generated("'2018-01-27 08:00:00':::TIMESTAMP")
+    } else if api.is_postgres() {
         DefaultValue::db_generated("'2018-01-27 08:00:00'::timestamp without time zone")
     } else if api.is_mssql() {
-        DefaultValue::db_generated("2018-01-27 08:00:00 +00:00")
+        let mut df = DefaultValue::db_generated("2018-01-27 08:00:00 +00:00");
+        df.set_constraint_name("Cat_birthday_df");
+        df
     } else if api.is_mysql_mariadb() {
         DefaultValue::db_generated("2018-01-27T08:00:00+00:00")
     } else if api.is_mysql_8() || api.is_mysql_5_6() {
@@ -41,7 +44,7 @@ fn function_expressions_as_dbgenerated_work(api: TestApi) {
         }
     "#;
 
-    api.schema_push(dm).send().assert_green_bang();
+    api.schema_push_w_datasource(dm).send().assert_green();
 
     api.assert_schema().assert_table("Cat", |table| {
         table.assert_column("id", |col| {
@@ -50,7 +53,7 @@ fn function_expressions_as_dbgenerated_work(api: TestApi) {
     });
 }
 
-#[test_connector(tags(Postgres))]
+#[test_connector(tags(Postgres), exclude(Cockroach))]
 fn default_dbgenerated_with_type_definitions_should_work(api: TestApi) {
     let dm = r#"
         model A {
@@ -58,7 +61,7 @@ fn default_dbgenerated_with_type_definitions_should_work(api: TestApi) {
         }
     "#;
 
-    api.schema_push(dm).send().assert_green_bang();
+    api.schema_push_w_datasource(dm).send().assert_green();
 
     api.assert_schema().assert_table("A", |table| {
         table.assert_column("id", |col| {
@@ -67,7 +70,24 @@ fn default_dbgenerated_with_type_definitions_should_work(api: TestApi) {
     });
 }
 
-#[test_connector(tags(Postgres))]
+#[test_connector(tags(Cockroach))]
+fn default_dbgenerated_with_type_definitions_should_work_cockroach(api: TestApi) {
+    let dm = r#"
+        model A {
+            id String @id @default(dbgenerated("(now()::text)"))
+        }
+    "#;
+
+    api.schema_push_w_datasource(dm).send().assert_green();
+
+    api.assert_schema().assert_table("A", |table| {
+        table.assert_column("id", |col| {
+            col.assert_default(Some(DefaultValue::db_generated("now():::TIMESTAMPTZ::STRING")))
+        })
+    });
+}
+
+#[test_connector(tags(Postgres), exclude(Cockroach))]
 fn default_dbgenerated_should_work(api: TestApi) {
     let dm = r#"
         model A {
@@ -75,7 +95,7 @@ fn default_dbgenerated_should_work(api: TestApi) {
         }
     "#;
 
-    api.schema_push(dm).send().assert_green_bang();
+    api.schema_push_w_datasource(dm).send().assert_green();
 
     api.assert_schema().assert_table("A", |table| {
         table.assert_column("id", |col| {
@@ -84,7 +104,24 @@ fn default_dbgenerated_should_work(api: TestApi) {
     });
 }
 
-#[test_connector(tags(Postgres))]
+#[test_connector(tags(Cockroach))]
+fn default_dbgenerated_should_work_cockroach(api: TestApi) {
+    let dm = r#"
+        model A {
+            id DateTime @id @default(dbgenerated("(now())"))
+        }
+    "#;
+
+    api.schema_push_w_datasource(dm).send().assert_green();
+
+    api.assert_schema().assert_table("A", |table| {
+        table.assert_column("id", |col| {
+            col.assert_default(Some(DefaultValue::db_generated("now():::TIMESTAMP")))
+        })
+    });
+}
+
+#[test_connector(tags(Postgres), exclude(Cockroach))]
 fn uuid_default(api: TestApi) {
     let dm = r#"
         model A {
@@ -93,11 +130,33 @@ fn uuid_default(api: TestApi) {
         }
     "#;
 
-    api.schema_push(dm).send().assert_green_bang();
+    api.schema_push_w_datasource(dm).send().assert_green();
 
     api.assert_schema().assert_table("A", |table| {
         table.assert_column("uuid", |col| {
-            col.assert_default(Some(DefaultValue::value("00000000-0000-0000-0016-000000000004")))
+            col.assert_default(Some(DefaultValue::db_generated(
+                "'00000000-0000-0000-0016-000000000004'::uuid",
+            )))
+        })
+    });
+}
+
+#[test_connector(tags(Cockroach))]
+fn uuid_default_cockroach(api: TestApi) {
+    let dm = r#"
+        model A {
+            id   String @id @db.Uuid
+            uuid String @db.Uuid @default("00000000-0000-0000-0016-000000000004")
+        }
+    "#;
+
+    api.schema_push_w_datasource(dm).send().assert_green();
+
+    api.assert_schema().assert_table("A", |table| {
+        table.assert_column("uuid", |col| {
+            col.assert_default(Some(DefaultValue::db_generated(
+                "'00000000-0000-0000-0016-000000000004':::UUID",
+            )))
         })
     });
 }
@@ -106,23 +165,27 @@ fn uuid_default(api: TestApi) {
 fn a_default_can_be_dropped(api: TestApi) {
     let directory = api.create_migrations_directory();
 
-    let dm1 = r#"
+    let dm1 = api.datamodel_with_provider(
+        r#"
         model User {
             id   Int     @id @default(autoincrement())
             name String  @default("Musti")
         }
-    "#;
+    "#,
+    );
 
-    api.create_migration("initial", dm1, &directory).send_sync();
+    api.create_migration("initial", &dm1, &directory).send_sync();
 
-    let dm2 = r#"
+    let dm2 = api.datamodel_with_provider(
+        r#"
         model User {
             id   Int     @id @default(autoincrement())
             name String?
         }
-    "#;
+    "#,
+    );
 
-    api.create_migration("second-migration", dm2, &directory).send_sync();
+    api.create_migration("second-migration", &dm2, &directory).send_sync();
 
     api.apply_migrations(&directory)
         .send_sync()
@@ -148,7 +211,7 @@ fn schemas_with_dbgenerated_work(api: TestApi) {
     }
     "#;
 
-    api.schema_push(dm1).send().assert_green_bang();
+    api.schema_push_w_datasource(dm1).send().assert_green();
 }
 
 #[test_connector(tags(Mysql8, Mariadb), exclude(Vitess))]
@@ -175,7 +238,7 @@ fn schemas_with_dbgenerated_expressions_work(api: TestApi) {
     }
     "#;
 
-    api.schema_push(dm1).send().assert_green_bang();
+    api.schema_push_w_datasource(dm1).send().assert_green();
 }
 
 #[test_connector]
@@ -187,11 +250,11 @@ fn column_defaults_must_be_migrated(api: TestApi) {
         }
     "#;
 
-    api.schema_push(dm1).send().assert_green_bang();
+    api.schema_push_w_datasource(dm1).send().assert_green();
 
     api.assert_schema().assert_table("Fruit", |table| {
         table.assert_column("name", |col| {
-            col.assert_default(Some(DefaultValue::value(PrismaValue::String("banana".to_string()))))
+            col.assert_default_kind(Some(DefaultKind::Value(PrismaValue::String("banana".to_string()))))
         })
     });
 
@@ -202,10 +265,92 @@ fn column_defaults_must_be_migrated(api: TestApi) {
         }
     "#;
 
-    api.schema_push(dm2).send().assert_green_bang();
+    api.schema_push_w_datasource(dm2).send().assert_green();
 
     api.assert_schema().assert_table("Fruit", |table| {
-        table.assert_column("name", |col| col.assert_default(Some(DefaultValue::value("mango"))))
+        table.assert_column("name", |col| {
+            col.assert_default_kind(Some(DefaultKind::Value(PrismaValue::String("mango".to_string()))))
+        })
+    });
+}
+
+#[test_connector(tags(Mssql))]
+fn default_constraint_names_should_work(api: TestApi) {
+    let dm = r#"
+        generator js {
+            provider = "prisma-client-js"
+            previewFeatures = ["namedConstraints"]
+        }
+
+        model A {
+            id Int @id @default(autoincrement())
+            data String @default("beeb buub", map: "meow")
+        }
+    "#;
+
+    api.schema_push_w_datasource(dm).send().assert_green();
+
+    api.assert_schema().assert_table("A", |table| {
+        table.assert_column("data", |col| {
+            let mut expected = DefaultValue::value("beeb buub");
+            expected.set_constraint_name("meow");
+
+            col.assert_default(Some(expected))
+        })
+    });
+}
+
+#[test_connector(tags(Mssql))]
+fn default_constraint_name_default_values_should_work(api: TestApi) {
+    let dm = r#"
+        generator js {
+            provider = "prisma-client-js"
+            previewFeatures = ["namedConstraints"]
+        }
+
+        model A {
+            id Int @id @default(autoincrement())
+            data String @default("beeb buub")
+        }
+    "#;
+
+    api.schema_push_w_datasource(dm).send().assert_green();
+
+    api.assert_schema().assert_table("A", |table| {
+        table.assert_column("data", |col| {
+            let mut expected = DefaultValue::value("beeb buub");
+            expected.set_constraint_name("A_data_df");
+
+            col.assert_default(Some(expected))
+        })
+    });
+}
+
+#[test_connector(tags(Mssql))]
+fn default_constraint_name_default_values_with_mapping_should_work(api: TestApi) {
+    let dm = r#"
+        generator js {
+            provider = "prisma-client-js"
+            previewFeatures = ["namedConstraints"]
+        }
+
+        model A {
+            id Int @id @default(autoincrement())
+            data String @default("beeb buub") @map("purr")
+
+            @@map("meow")
+        }
+    "#;
+
+    api.schema_push_w_datasource(dm).send().assert_green();
+
+    api.assert_schema().assert_table("meow", |table| {
+        table.assert_column("purr", |col| {
+            let mut expected = DefaultValue::value("beeb buub");
+            expected.set_constraint_name("meow_purr_df");
+
+            col.assert_default(Some(expected))
+        })
     });
 }
 
@@ -223,10 +368,10 @@ fn escaped_string_defaults_are_not_arbitrarily_migrated(api: TestApi) {
         }
     "#;
 
-    api.schema_push(dm1)
+    api.schema_push_w_datasource(dm1)
         .migration_id(Some("first migration"))
         .send()
-        .assert_green_bang();
+        .assert_green();
 
     let insert = Insert::single_into(api.render_table_name("Fruit"))
         .value("id", "apple-id")
@@ -236,10 +381,10 @@ fn escaped_string_defaults_are_not_arbitrarily_migrated(api: TestApi) {
 
     api.query(insert.into());
 
-    api.schema_push(dm1)
+    api.schema_push_w_datasource(dm1)
         .migration_id(Some("second migration"))
         .send()
-        .assert_green_bang()
+        .assert_green()
         .assert_no_steps();
 
     let sql_schema = api.assert_schema().into_schema();
@@ -250,21 +395,21 @@ fn escaped_string_defaults_are_not_arbitrarily_migrated(api: TestApi) {
         assert_eq!(DefaultValue::value("top\ndown").kind(), default.kind());
         assert!(default
             .constraint_name()
-            .map(|cn| cn.starts_with("DF__Fruit__sideNames"))
+            .map(|cn| cn.starts_with("Fruit_sideNames_df"))
             .unwrap());
 
         let default = table.column("contains").and_then(|c| c.default.clone()).unwrap();
         assert_eq!(DefaultValue::value("'potassium'").kind(), default.kind());
         assert!(default
             .constraint_name()
-            .map(|cn| cn.starts_with("DF__Fruit__contains"))
+            .map(|cn| cn.starts_with("Fruit_contains_df"))
             .unwrap());
 
         let default = table.column("seasonality").and_then(|c| c.default.clone()).unwrap();
         assert_eq!(DefaultValue::value(r#""summer""#).kind(), default.kind());
         assert!(default
             .constraint_name()
-            .map(|cn| cn.starts_with("DF__Fruit__seasonali"))
+            .map(|cn| cn.starts_with("Fruit_seasonality_df"))
             .unwrap());
     } else {
         assert_eq!(

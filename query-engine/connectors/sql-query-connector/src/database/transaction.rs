@@ -42,7 +42,13 @@ impl<'tx> Transaction for SqlConnectorTransaction<'tx> {
     #[tracing::instrument(skip(self))]
     async fn rollback(&mut self) -> connector::Result<()> {
         catch(self.connection_info.clone(), async move {
-            Ok(self.inner.rollback().await.map_err(SqlError::from)?)
+            let res = self.inner.rollback().await.map_err(SqlError::from);
+
+            if matches!(res, Err(SqlError::TransactionAlreadyClosed(_))) {
+                Ok(())
+            } else {
+                res
+            }
         })
         .await
     }
@@ -75,7 +81,15 @@ impl<'tx> ReadOperations for SqlConnectorTransaction<'tx> {
         aggr_selections: &[RelAggregationSelection],
     ) -> connector::Result<ManyRecords> {
         catch(self.connection_info.clone(), async move {
-            read::get_many_records(&self.inner, model, query_arguments, selected_fields, aggr_selections).await
+            read::get_many_records(
+                &self.inner,
+                model,
+                query_arguments,
+                selected_fields,
+                aggr_selections,
+                SqlInfo::from(&self.connection_info),
+            )
+            .await
         })
         .await
     }

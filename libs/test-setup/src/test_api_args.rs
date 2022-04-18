@@ -14,7 +14,7 @@ pub(crate) struct DbUnderTest {
 }
 
 const MISSING_TEST_DATABASE_URL_MSG: &str = r#"
-Missing TEST_DATABASE URL from environment.
+Missing TEST_DATABASE_URL from environment.
 
 If you are developing with the docker-compose based setup, you can find the environment variables under .test_database_urls at the project root.
 
@@ -127,6 +127,12 @@ impl TestApiArgs {
         self.db.capabilities
     }
 
+    pub async fn create_mssql_database(&self) -> (Quaint, String) {
+        mssql::init_mssql_database(self.database_url(), self.test_function_name)
+            .await
+            .unwrap()
+    }
+
     pub async fn create_mysql_database(&self) -> (&'static str, String) {
         mysql::create_mysql_database(self.database_url(), self.test_function_name)
             .await
@@ -169,6 +175,12 @@ pub struct DatasourceBlock<'a> {
     provider: &'a str,
     url: &'a str,
     params: &'a [(&'a str, &'a str)],
+}
+
+impl<'a> DatasourceBlock<'a> {
+    pub fn url(&self) -> &str {
+        self.url
+    }
 }
 
 impl Display for DatasourceBlock<'_> {

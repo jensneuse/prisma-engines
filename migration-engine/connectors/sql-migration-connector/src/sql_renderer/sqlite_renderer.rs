@@ -4,6 +4,7 @@ use crate::{
     pair::Pair,
     sql_migration::{AlterEnum, AlterTable, RedefineTable, TableChange},
 };
+use indoc::formatdoc;
 use once_cell::sync::Lazy;
 use prisma_value::PrismaValue;
 use regex::Regex;
@@ -29,13 +30,24 @@ impl SqlRenderer for SqliteFlavour {
         let table_reference = self.quote(index.table().name());
         let columns = index.columns().map(|c| self.quote(c.name()));
 
-        format!(
+        let index_create = format!(
             "CREATE {index_type}INDEX {index_name} ON {table_reference}({columns})",
             index_type = index_type,
             index_name = index_name,
             table_reference = table_reference,
             columns = columns.join(", ")
-        )
+        );
+
+        if index.name().starts_with("sqlite_") {
+            formatdoc!(
+                "Pragma writable_schema=1;
+                 {};
+                 Pragma writable_schema=0",
+                index_create
+            )
+        } else {
+            index_create
+        }
     }
 
     fn render_add_foreign_key(&self, _foreign_key: &ForeignKeyWalker<'_>) -> String {
@@ -72,6 +84,7 @@ impl SqlRenderer for SqliteFlavour {
                 TableChange::DropAndRecreateColumn { .. } => unreachable!("DropAndRecreateColumn on SQLite"),
                 TableChange::DropColumn { .. } => unreachable!("DropColumn on SQLite"),
                 TableChange::DropPrimaryKey { .. } => unreachable!("DropPrimaryKey on SQLite"),
+                TableChange::RenamePrimaryKey { .. } => unreachable!("AddPrimaryKey on SQLite"),
             };
         }
 
@@ -135,6 +148,13 @@ impl SqlRenderer for SqliteFlavour {
         format!("DROP INDEX {}", self.quote(index.name()))
     }
 
+    fn render_drop_and_recreate_index(&self, _indexes: Pair<&IndexWalker<'_>>) -> Vec<String> {
+        vec![
+            self.render_drop_index(*_indexes.previous()),
+            self.render_create_index(*_indexes.next()),
+        ]
+    }
+
     fn render_drop_table(&self, table_name: &str) -> Vec<String> {
         // Turning off the pragma is safe, because schema validation would forbid foreign keys
         // to a non-existent model. There appears to be no other way to deal with cyclic
@@ -188,6 +208,10 @@ impl SqlRenderer for SqliteFlavour {
 
     fn render_drop_user_defined_type(&self, _: &UserDefinedTypeWalker<'_>) -> String {
         unreachable!("render_drop_user_defined_type on SQLite")
+    }
+
+    fn render_rename_foreign_key(&self, _fks: &Pair<ForeignKeyWalker<'_>>) -> String {
+        unreachable!("render RenameForeignKey on SQLite")
     }
 }
 

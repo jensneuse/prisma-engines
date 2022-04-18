@@ -22,6 +22,7 @@ pub(crate) struct Context<'ast> {
     // @map'ed names indexes. These are not in the db because they are only used for validation.
     pub(super) mapped_model_names: HashMap<&'ast str, ast::ModelId>,
     pub(super) mapped_model_scalar_field_names: HashMap<(ast::ModelId, &'ast str), ast::FieldId>,
+    pub(super) mapped_composite_type_names: HashMap<(ast::CompositeTypeId, &'ast str), ast::FieldId>,
     pub(super) mapped_enum_names: HashMap<&'ast str, ast::EnumId>,
     pub(super) mapped_enum_value_names: HashMap<(ast::EnumId, &'ast str), u32>,
 }
@@ -38,6 +39,7 @@ impl<'ast> Context<'ast> {
             mapped_model_scalar_field_names: Default::default(),
             mapped_enum_names: Default::default(),
             mapped_enum_value_names: Default::default(),
+            mapped_composite_type_names: Default::default(),
         }
     }
 
@@ -104,11 +106,6 @@ impl<'ast> Context<'ast> {
         f(&mut attributes, self);
 
         for attribute in attributes.unused_attributes() {
-            // Native types...
-            if attribute.name.name.contains('.') {
-                continue;
-            }
-
             self.push_error(DatamodelError::new_attribute_not_known_error(
                 &attribute.name.name,
                 attribute.name.span,

@@ -3,9 +3,10 @@ use datamodel::{diagnostics::ValidatedConfiguration, Datamodel};
 use napi::threadsafe_function::ThreadsafeFunction;
 use opentelemetry::global;
 use prisma_models::DatamodelConverter;
-use query_core::{exec_loader, schema_builder, BuildMode, QueryExecutor, QuerySchema, QuerySchemaRenderer};
-use request_handlers::{GraphQLSchemaRenderer, GraphQlBody, GraphQlHandler, PrismaResponse};
+use query_core::{executor, schema_builder, BuildMode, QueryExecutor, QuerySchema, QuerySchemaRenderer, TxId};
+use request_handlers::{GraphQLSchemaRenderer, GraphQlBody, GraphQlHandler, PrismaResponse, TxInput};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     collections::{BTreeMap, HashMap},
     path::PathBuf,
@@ -90,7 +91,7 @@ pub struct ConstructorOptions {
     #[serde(default)]
     datasource_overrides: BTreeMap<String, String>,
     #[serde(default)]
-    env: HashMap<String, String>,
+    env: serde_json::Value,
     #[serde(default)]
     telemetry: TelemetryOptions,
     config_dir: PathBuf,
@@ -121,6 +122,7 @@ impl QueryEngine {
             ignore_env_var_errors,
         } = opts;
 
+        let env = stringify_env_values(env)?; // we cannot trust anything JS sends us from process.env
         let overrides: Vec<(_, _)> = datasource_overrides.into_iter().collect();
 
         let config = if ignore_env_var_errors {
@@ -191,14 +193,14 @@ impl QueryEngine {
                             .first()
                             .ok_or_else(|| ApiError::configuration("No valid data source found"))?;
 
-                        let preview_features: Vec<_> = builder.config.subject.preview_features().cloned().collect();
+                        let preview_features: Vec<_> = builder.config.subject.preview_features().iter().collect();
                         let url = data_source
                             .load_url_with_config_dir(&builder.config_dir, |key| {
                                 builder.env.get(key).map(ToString::to_string)
                             })
                             .map_err(|err| crate::error::ApiError::Conversion(err, builder.datamodel.raw.clone()))?;
 
-                        let (db_name, executor) = exec_loader::load(data_source, &preview_features, &url).await?;
+                        let (db_name, executor) = executor::load(data_source, &preview_features, &url).await?;
                         let connector = executor.primary_connector();
                         connector.get_connection().await?;
 
@@ -258,7 +260,12 @@ impl QueryEngine {
     }
 
     /// If connected, sends a query to the core and returns the response.
-    pub async fn query(&self, query: GraphQlBody, trace: HashMap<String, String>) -> crate::Result<PrismaResponse> {
+    pub async fn query(
+        &self,
+        query: GraphQlBody,
+        trace: HashMap<String, String>,
+        tx_id: Option<String>,
+    ) -> crate::Result<PrismaResponse> {
         match *self.inner.read().await {
             Inner::Connected(ref engine) => {
                 engine
@@ -270,7 +277,76 @@ impl QueryEngine {
                         span.set_parent(cx);
 
                         let handler = GraphQlHandler::new(engine.executor(), engine.query_schema());
-                        Ok(handler.handle(query).await)
+                        Ok(handler.handle(query, tx_id.map(TxId::from)).await)
+                    })
+                    .await
+            }
+            Inner::Builder(_) => Err(ApiError::NotConnected),
+        }
+    }
+
+    /// If connected, attempts to start a transaction in the core and returns its ID.
+    pub async fn start_tx(&self, input: TxInput, trace: HashMap<String, String>) -> crate::Result<String> {
+        match *self.inner.read().await {
+            Inner::Connected(ref engine) => {
+                engine
+                    .logger
+                    .with_logging(|| async move {
+                        let cx = global::get_text_map_propagator(|propagator| propagator.extract(&trace));
+                        let span = tracing::span!(Level::TRACE, "query");
+
+                        span.set_parent(cx);
+
+                        match engine.executor().start_tx(input.max_wait, input.timeout).await {
+                            Ok(tx_id) => Ok(json!({ "id": tx_id.to_string() }).to_string()),
+                            Err(err) => Ok(map_known_error(err)?),
+                        }
+                    })
+                    .await
+            }
+            Inner::Builder(_) => Err(ApiError::NotConnected),
+        }
+    }
+
+    /// If connected, attempts to commit a transaction with id `tx_id` in the core.
+    pub async fn commit_tx(&self, tx_id: String, trace: HashMap<String, String>) -> crate::Result<String> {
+        match *self.inner.read().await {
+            Inner::Connected(ref engine) => {
+                engine
+                    .logger
+                    .with_logging(|| async move {
+                        let cx = global::get_text_map_propagator(|propagator| propagator.extract(&trace));
+                        let span = tracing::span!(Level::TRACE, "query");
+
+                        span.set_parent(cx);
+
+                        match engine.executor().commit_tx(TxId::from(tx_id)).await {
+                            Ok(_) => Ok("{}".to_string()),
+                            Err(err) => Ok(map_known_error(err)?),
+                        }
+                    })
+                    .await
+            }
+            Inner::Builder(_) => Err(ApiError::NotConnected),
+        }
+    }
+
+    /// If connected, attempts to roll back a transaction with id `tx_id` in the core.
+    pub async fn rollback_tx(&self, tx_id: String, trace: HashMap<String, String>) -> crate::Result<String> {
+        match *self.inner.read().await {
+            Inner::Connected(ref engine) => {
+                engine
+                    .logger
+                    .with_logging(|| async move {
+                        let cx = global::get_text_map_propagator(|propagator| propagator.extract(&trace));
+                        let span = tracing::span!(Level::TRACE, "query");
+
+                        span.set_parent(cx);
+
+                        match engine.executor().rollback_tx(TxId::from(tx_id)).await {
+                            Ok(_) => Ok("{}".to_string()),
+                            Err(err) => Ok(map_known_error(err)?),
+                        }
                     })
                     .await
             }
@@ -285,6 +361,44 @@ impl QueryEngine {
             Inner::Builder(_) => Err(ApiError::NotConnected),
         }
     }
+}
+
+fn map_known_error(err: query_core::CoreError) -> crate::Result<String> {
+    let user_error: user_facing_errors::Error = err.into();
+    let value = serde_json::to_string(&user_error)?;
+
+    Ok(value)
+}
+
+fn stringify_env_values(origin: serde_json::Value) -> crate::Result<HashMap<String, String>> {
+    use serde_json::Value;
+
+    let msg = match origin {
+        Value::Object(map) => {
+            let mut result: HashMap<String, String> = HashMap::new();
+
+            for (key, val) in map.into_iter() {
+                match val {
+                    Value::Null => continue,
+                    Value::String(val) => {
+                        result.insert(key, val);
+                    }
+                    val => {
+                        result.insert(key, val.to_string());
+                    }
+                }
+            }
+
+            return Ok(result);
+        }
+        Value::Null => return Ok(Default::default()),
+        Value::Bool(_) => "Expected an object for the env constructor parameter, got a boolean.",
+        Value::Number(_) => "Expected an object for the env constructor parameter, got a number.",
+        Value::String(_) => "Expected an object for the env constructor parameter, got a string.",
+        Value::Array(_) => "Expected an object for the env constructor parameter, got an array.",
+    };
+
+    Err(ApiError::JsonDecode(msg.to_string()))
 }
 
 pub fn set_panic_hook() {

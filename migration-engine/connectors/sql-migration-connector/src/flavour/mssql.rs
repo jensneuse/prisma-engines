@@ -1,5 +1,6 @@
 use crate::{
-    connect, connection_wrapper::Connection, error::quaint_error_to_connector_error, SqlFlavour, SqlMigrationConnector,
+    connection_wrapper::{connect, Connection},
+    SqlFlavour, SqlMigrationConnector,
 };
 use connection_string::JdbcString;
 use datamodel::common::preview_features::PreviewFeature;
@@ -7,9 +8,8 @@ use enumflags2::BitFlags;
 use indoc::formatdoc;
 use migration_connector::{migrations_directory::MigrationDirectory, ConnectorError, ConnectorResult};
 use quaint::{connector::MssqlUrl, prelude::Table};
-use sql_schema_describer::{DescriberErrorKind, SqlSchema, SqlSchemaDescriberBackend};
+use sql_schema_describer::SqlSchema;
 use std::str::FromStr;
-use user_facing_errors::{introspection_engine::DatabaseSchemaInconsistent, KnownError};
 
 pub(crate) struct MssqlFlavour {
     url: MssqlUrl,
@@ -65,7 +65,7 @@ impl MssqlFlavour {
             let shadow_conninfo = conn.connection_info();
             let main_conninfo = main_connection.connection_info();
 
-            super::validate_connection_infos_do_not_match((&shadow_conninfo, &main_conninfo))?;
+            super::validate_connection_infos_do_not_match((shadow_conninfo, main_conninfo))?;
 
             if self.reset(&conn).await.is_err() {
                 connector.best_effort_reset(&conn).await?;
@@ -143,9 +143,11 @@ impl SqlFlavour for MssqlFlavour {
 
         let conn = connect(jdbc_string).await?;
 
-        let query = format!("CREATE SCHEMA {}", conn.connection_info().schema_name(),);
-
-        conn.raw_cmd(&query).await?;
+        // dbo is created automatically
+        if conn.connection_info().schema_name() != "dbo" {
+            let query = format!("CREATE SCHEMA {}", conn.connection_info().schema_name(),);
+            conn.raw_cmd(&query).await?;
+        }
 
         Ok(db_name)
     }
@@ -167,29 +169,28 @@ impl SqlFlavour for MssqlFlavour {
         Ok(connection.raw_cmd(&sql).await?)
     }
 
-    async fn describe_schema<'a>(&'a self, connection: &Connection) -> ConnectorResult<SqlSchema> {
-        sql_schema_describer::mssql::SqlSchemaDescriber::new(connection.queryable())
-            .describe(connection.connection_info().schema_name())
-            .await
-            .map_err(|err| match err.into_kind() {
-                DescriberErrorKind::QuaintError(err) => {
-                    quaint_error_to_connector_error(err, &connection.connection_info())
-                }
-                e @ DescriberErrorKind::CrossSchemaReference { .. } => {
-                    let err = KnownError::new(DatabaseSchemaInconsistent {
-                        explanation: format!("{}", e),
-                    });
+    async fn drop_database(&self, database_url: &str) -> ConnectorResult<()> {
+        {
+            let conn_str: JdbcString = format!("jdbc:{}", database_url)
+                .parse()
+                .map_err(ConnectorError::url_parse_error)?;
 
-                    ConnectorError::from(err)
-                }
-            })
-    }
+            let db_name = conn_str
+                .properties()
+                .get("database")
+                .map(|s| s.to_owned())
+                .unwrap_or_else(|| "master".to_owned());
 
-    async fn drop_database(&self, _database_url: &str) -> ConnectorResult<()> {
-        let features = vec!["microsoftSqlServer".into()];
-        return Err(ConnectorError::user_facing(
-            user_facing_errors::migration_engine::PreviewFeaturesBlocked { features },
-        ));
+            assert!(db_name != "master", "Cannot drop the `master` database.");
+        }
+
+        let (db_name, master_uri) = Self::master_url(database_url)?;
+        let conn = connect(&master_uri.to_string()).await?;
+
+        let query = format!("DROP DATABASE IF EXISTS [{}]", db_name);
+        conn.raw_cmd(&query).await?;
+
+        Ok(())
     }
 
     async fn drop_migrations_table(&self, connection: &Connection) -> ConnectorResult<()> {
@@ -209,7 +210,7 @@ impl SqlFlavour for MssqlFlavour {
     }
 
     async fn reset(&self, connection: &Connection) -> ConnectorResult<()> {
-        let schema_name = connection.schema_name();
+        let schema_name = connection.connection_info().schema_name();
 
         let drop_procedures = format!(
             r#"
@@ -296,11 +297,30 @@ impl SqlFlavour for MssqlFlavour {
             schema_name
         );
 
+        let drop_types = format!(
+            r#"
+            DECLARE @stmt NVARCHAR(max)
+            DECLARE @n CHAR(1)
+
+            SET @n = CHAR(10)
+
+            SELECT @stmt = ISNULL(@stmt + @n, '') +
+                'DROP TYPE [' + SCHEMA_NAME(schema_id) + '].[' + name + ']'
+            FROM sys.types
+            WHERE SCHEMA_NAME(schema_id) = '{0}'
+            AND is_user_defined = 1
+
+            EXEC SP_EXECUTESQL @stmt
+            "#,
+            schema_name
+        );
+
         connection.raw_cmd(&drop_procedures).await?;
         connection.raw_cmd(&drop_views).await?;
         connection.raw_cmd(&drop_shared_defaults).await?;
         connection.raw_cmd(&drop_fks).await?;
         connection.raw_cmd(&drop_tables).await?;
+        connection.raw_cmd(&drop_types).await?;
 
         Ok(())
     }
@@ -383,7 +403,7 @@ impl SqlFlavour for MssqlFlavour {
                         })?;
                 }
 
-                self.describe_schema(&temp_database).await
+                temp_database.describe_schema().await
             })()
             .await
         };

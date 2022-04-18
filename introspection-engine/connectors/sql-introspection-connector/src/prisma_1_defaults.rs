@@ -16,7 +16,7 @@ pub fn add_prisma_1_id_defaults(
 
     if matches!(version, Version::Prisma1 | Version::Prisma11) {
         for model in data_model.models().filter(|m| m.has_single_id_field()) {
-            let id_field = model.scalar_fields().find(|f| f.is_id).unwrap();
+            let id_field = model.scalar_fields().find(|f| model.field_is_primary(&f.name)).unwrap();
             let table_name = model.database_name.as_ref().unwrap_or(&model.name);
             let table = schema.table(table_name).unwrap();
             let column_name = id_field.database_name.as_ref().unwrap_or(&id_field.name);
@@ -53,10 +53,10 @@ pub fn add_prisma_1_id_defaults(
     for (mf, cuid) in needs_to_be_changed {
         let field = &mut data_model.find_scalar_field_mut(&mf.model, &mf.field);
         if cuid {
-            field.default_value = Some(dml::DefaultValue::Expression(ValueGenerator::new_cuid()));
+            field.default_value = Some(dml::DefaultValue::new_expression(ValueGenerator::new_cuid()));
             inferred_cuids.push(mf);
         } else {
-            field.default_value = Some(dml::DefaultValue::Expression(ValueGenerator::new_uuid()));
+            field.default_value = Some(dml::DefaultValue::new_expression(ValueGenerator::new_uuid()));
             inferred_uuids.push(mf);
         }
     }

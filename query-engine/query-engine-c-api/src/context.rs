@@ -1,9 +1,8 @@
 use datamodel::{Configuration, Datamodel};
 use prisma_models::DatamodelConverter;
-use query_core::{exec_loader, schema::QuerySchemaRef, schema_builder, BuildMode, QueryExecutor, QuerySchema};
+use query_core::{executor,schema::QuerySchemaRef, schema_builder, BuildMode, QueryExecutor, QuerySchema};
 use std::{fmt, sync::Arc};
 use crate::error::PrismaError;
-use connector::Connector;
 
 /// Prisma request context containing all immutable state of the process.
 /// There is usually only one context initialized per process.
@@ -64,11 +63,14 @@ impl PrismaContext {
 
         // Load executor
 
-        let preview_features: Vec<_> = config.preview_features().cloned().collect();
-        let (db_name, executor) = exec_loader::load(&data_source, &preview_features, &url).await?;
+        let preview_features: Vec<_> = config.preview_features().iter().collect();
+
+        let (db_name, executor) = executor::load(&data_source, &preview_features, &url).await?;
 
         // Build internal data model
         let internal_data_model = template.build(db_name);
+
+        let preview_features: Vec<_> = config.preview_features().iter().collect();
 
         // Construct query schema
         let build_mode = if legacy { BuildMode::Legacy } else { BuildMode::Modern };

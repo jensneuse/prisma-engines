@@ -1,4 +1,4 @@
-use super::*;
+use super::{Argument, Identifier, Span, WithIdentifier, WithSpan};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Attribute {
@@ -22,6 +22,10 @@ impl Attribute {
 
     pub fn is_index(&self) -> bool {
         matches!(self.name.name.as_str(), "index" | "unique")
+    }
+
+    pub fn is_id(&self) -> bool {
+        matches!(self.name.name.as_str(), "id")
     }
 }
 

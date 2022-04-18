@@ -139,6 +139,12 @@ pub enum SqlError {
 
     #[error("Server terminated the connection.")]
     ConnectionClosed,
+
+    #[error("{}", _0)]
+    TransactionAlreadyClosed(String),
+
+    #[error("Query parameter limit exceeded error: {0}.")]
+    QueryParameterLimitExceeded(String),
 }
 
 impl SqlError {
@@ -221,6 +227,17 @@ impl SqlError {
                 )),
                 kind: ErrorKind::ConnectionClosed,
             },
+            SqlError::TransactionAlreadyClosed(message) => ConnectorError {
+                user_facing_error: Some(user_facing_errors::KnownError::new(
+                    user_facing_errors::common::TransactionAlreadyClosed {
+                        message: message.clone(),
+                    },
+                )),
+                kind: ErrorKind::TransactionAlreadyClosed { message },
+            },
+            SqlError::QueryParameterLimitExceeded(e) => {
+                ConnectorError::from_kind(ErrorKind::QueryParameterLimitExceeded(e))
+            }
         }
     }
 }
@@ -254,6 +271,7 @@ impl From<quaint::error::Error> for SqlError {
             QuaintKind::ColumnNotFound { column } => SqlError::ColumnDoesNotExist(format!("{}", column)),
             QuaintKind::TableDoesNotExist { table } => SqlError::TableDoesNotExist(format!("{}", table)),
             QuaintKind::ConnectionClosed => SqlError::ConnectionClosed,
+            e @ QuaintKind::TransactionAlreadyClosed(_) => SqlError::TransactionAlreadyClosed(format!("{}", e)),
             e @ QuaintKind::IncorrectNumberOfParameters { .. } => SqlError::QueryError(e.into()),
             e @ QuaintKind::ConversionError(_) => SqlError::ConversionError(e.into()),
             e @ QuaintKind::ResultIndexOutOfBounds { .. } => SqlError::QueryError(e.into()),

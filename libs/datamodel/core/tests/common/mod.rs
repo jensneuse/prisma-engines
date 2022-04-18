@@ -1,11 +1,13 @@
 use datamodel::{
     diagnostics::*,
     dml::{self, ScalarType},
-    Configuration, Datamodel, IndexDefinition, NativeTypeInstance, StringFromEnvVar,
+    Configuration, Datamodel, IndexDefinition, Model, NativeTypeInstance, PrimaryKeyDefinition, StringFromEnvVar,
 };
 use pretty_assertions::assert_eq;
 
 pub(crate) use expect_test::expect;
+pub(crate) use indoc::formatdoc;
+pub(crate) use indoc::indoc;
 
 pub(crate) trait DatasourceAsserts {
     fn assert_name(&self, name: &str) -> &Self;
@@ -25,8 +27,7 @@ pub(crate) trait ScalarFieldAsserts {
     fn assert_native_type(&self) -> &NativeTypeInstance;
     fn assert_with_db_name(&self, t: &str) -> &Self;
     fn assert_default_value(&self, t: dml::DefaultValue) -> &Self;
-    fn assert_is_id(&self) -> &Self;
-    fn assert_is_unique(&self, b: bool) -> &Self;
+    fn assert_is_id(&self, model: &Model) -> &Self;
     fn assert_is_updated_at(&self, b: bool) -> &Self;
     fn assert_ignored(&self, state: bool) -> &Self;
 }
@@ -39,16 +40,18 @@ pub(crate) trait RelationFieldAsserts {
     fn assert_relation_referenced_fields(&self, t: &[&str]) -> &Self;
     fn assert_relation_base_fields(&self, t: &[&str]) -> &Self;
     fn assert_ignored(&self, state: bool) -> &Self;
+    fn assert_relation_fk_name(&self, name: Option<String>) -> &Self;
 }
 
 pub(crate) trait ModelAsserts {
     fn assert_field_count(&self, count: usize) -> &Self;
     fn assert_has_scalar_field(&self, t: &str) -> &dml::ScalarField;
     fn assert_has_relation_field(&self, t: &str) -> &dml::RelationField;
-    fn assert_is_embedded(&self, t: bool) -> &Self;
     fn assert_with_db_name(&self, t: &str) -> &Self;
     fn assert_with_documentation(&self, t: &str) -> &Self;
     fn assert_has_index(&self, def: IndexDefinition) -> &Self;
+    fn assert_has_pk(&self, pk: PrimaryKeyDefinition) -> &Self;
+    fn assert_has_named_pk(&self, name: &str) -> &Self;
     fn assert_has_id_fields(&self, fields: &[&str]) -> &Self;
     fn assert_ignored(&self, state: bool) -> &Self;
 }
@@ -156,13 +159,8 @@ impl ScalarFieldAsserts for dml::ScalarField {
         self
     }
 
-    fn assert_is_id(&self) -> &Self {
-        assert!(self.is_id);
-        self
-    }
-
-    fn assert_is_unique(&self, b: bool) -> &Self {
-        assert_eq!(self.is_unique, b);
+    fn assert_is_id(&self, model: &Model) -> &Self {
+        assert!(model.field_is_primary(&self.name));
         self
     }
 
@@ -229,6 +227,11 @@ impl RelationFieldAsserts for dml::RelationField {
         assert_eq!(self.is_ignored, state);
         self
     }
+
+    fn assert_relation_fk_name(&self, name: Option<String>) -> &Self {
+        assert_eq!(self.relation_info.fk_name, name);
+        self
+    }
 }
 
 impl DatamodelAsserts for dml::Datamodel {
@@ -253,11 +256,6 @@ impl ModelAsserts for dml::Model {
             .unwrap_or_else(|| panic!("Field {} not found", t))
     }
 
-    fn assert_is_embedded(&self, t: bool) -> &Self {
-        assert_eq!(self.is_embedded, t);
-        self
-    }
-
     fn assert_with_db_name(&self, t: &str) -> &Self {
         assert_eq!(self.database_name, Some(t.to_owned()));
         self
@@ -278,8 +276,8 @@ impl ModelAsserts for dml::Model {
         self
     }
 
-    fn assert_has_id_fields(&self, fields: &[&str]) -> &Self {
-        assert_eq!(self.id_fields, fields);
+    fn assert_has_pk(&self, pk: PrimaryKeyDefinition) -> &Self {
+        assert_eq!(self.primary_key, Some(pk));
         self
     }
 
@@ -290,6 +288,16 @@ impl ModelAsserts for dml::Model {
 
     fn assert_field_count(&self, count: usize) -> &Self {
         assert_eq!(self.fields.len(), count);
+        self
+    }
+
+    fn assert_has_id_fields(&self, fields: &[&str]) -> &Self {
+        assert_eq!(self.primary_key.as_ref().unwrap().fields, fields);
+        self
+    }
+
+    fn assert_has_named_pk(&self, name: &str) -> &Self {
+        assert_eq!(self.primary_key.as_ref().unwrap().db_name, Some(name.to_string()));
         self
     }
 }

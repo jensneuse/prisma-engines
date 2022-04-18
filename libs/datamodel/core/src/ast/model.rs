@@ -3,7 +3,7 @@ use super::*;
 /// An opaque identifier for a field in an AST model. Use the
 /// `model[field_id]` syntax to resolve the id to an `ast::Field`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct FieldId(u32);
+pub(crate) struct FieldId(pub(super) u32);
 
 impl FieldId {
     /// Used for range bounds when iterating over BTreeMaps.
@@ -51,6 +51,20 @@ impl Model {
 
     pub(crate) fn find_field_bang(&self, name: &str) -> &Field {
         self.find_field(name).unwrap()
+    }
+
+    pub(crate) fn id_attribute(&self) -> &Attribute {
+        let from_model = self.attributes().iter().find(|attr| attr.is_id());
+
+        let mut from_field = self
+            .iter_fields()
+            .flat_map(|(_, field)| field.attributes().iter().find(|attr| attr.is_id()));
+
+        from_model.or_else(|| from_field.next()).unwrap()
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name.name
     }
 }
 

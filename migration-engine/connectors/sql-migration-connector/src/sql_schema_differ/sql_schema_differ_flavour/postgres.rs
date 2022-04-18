@@ -20,12 +20,14 @@ static POSTGIS_TABLES_OR_VIEWS: Lazy<RegexSet> = Lazy::new(|| {
     .unwrap()
 });
 
-/// The maximum length of postgres identifiers, in bytes.
-///
-/// Reference: https://www.postgresql.org/docs/12/limits.html
-const POSTGRES_IDENTIFIER_SIZE_LIMIT: usize = 63;
+// https://www.postgresql.org/docs/12/pgbuffercache.html
+static EXTENSION_VIEWS: Lazy<RegexSet> = Lazy::new(|| RegexSet::new(&["(?i)^pg_buffercache$"]).unwrap());
 
 impl SqlSchemaDifferFlavour for PostgresFlavour {
+    fn can_rename_foreign_key(&self) -> bool {
+        true
+    }
+
     fn push_enum_steps(&self, differ: &SqlSchemaDiffer<'_>, steps: &mut Vec<SqlMigrationStep>) {
         for enum_differ in differ.enum_pairs() {
             let mut alter_enum = AlterEnum {
@@ -64,11 +66,7 @@ impl SqlSchemaDifferFlavour for PostgresFlavour {
         // Implements correct comparison for truncated index names.
         let (previous_name, next_name) = pair.as_ref().map(|idx| idx.name()).into_tuple();
 
-        if previous_name.len() == POSTGRES_IDENTIFIER_SIZE_LIMIT && next_name.len() > POSTGRES_IDENTIFIER_SIZE_LIMIT {
-            previous_name[0..POSTGRES_IDENTIFIER_SIZE_LIMIT] != next_name[0..POSTGRES_IDENTIFIER_SIZE_LIMIT]
-        } else {
-            previous_name != next_name
-        }
+        previous_name != next_name
     }
 
     fn table_should_be_ignored(&self, table_name: &str) -> bool {
@@ -111,7 +109,7 @@ impl SqlSchemaDifferFlavour for PostgresFlavour {
     }
 
     fn view_should_be_ignored(&self, view_name: &str) -> bool {
-        POSTGIS_TABLES_OR_VIEWS.is_match(view_name)
+        POSTGIS_TABLES_OR_VIEWS.is_match(view_name) || EXTENSION_VIEWS.is_match(view_name)
     }
 }
 

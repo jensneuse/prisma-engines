@@ -16,7 +16,7 @@ pub(crate) trait SqlSchemaDifferFlavour {
     /// If this returns `true`, the differ will generate
     /// SqlMigrationStep::RedefineIndex steps instead of
     /// SqlMigrationStep::AlterIndex.
-    fn can_alter_index(&self) -> bool {
+    fn can_rename_index(&self) -> bool {
         true
     }
 
@@ -25,6 +25,9 @@ pub(crate) trait SqlSchemaDifferFlavour {
     fn can_cope_with_foreign_key_column_becoming_nonnullable(&self) -> bool {
         true
     }
+
+    /// Controls whether we will generate `RenameForeignKey` steps for this flavour.
+    fn can_rename_foreign_key(&self) -> bool;
 
     /// Return whether a column's type needs to be migrated, and how.
     fn column_type_change(&self, differ: Pair<ColumnWalker<'_>>) -> Option<ColumnTypeChange> {
@@ -123,6 +126,11 @@ pub(crate) trait SqlSchemaDifferFlavour {
     }
 
     fn view_should_be_ignored(&self, _view_name: &str) -> bool {
+        false
+    }
+
+    /// Supports named Foreign Keys.
+    fn has_unnamed_foreign_keys(&self) -> bool {
         false
     }
 }

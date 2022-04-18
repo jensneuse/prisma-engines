@@ -8,7 +8,7 @@ mod vitess;
 use datamodel_connector::ConnectorCapability;
 use enum_dispatch::enum_dispatch;
 use mongodb::*;
-use mysql::*;
+pub use mysql::*;
 use postgres::*;
 use sql_server::*;
 use sqlite::*;
@@ -42,6 +42,13 @@ pub trait ConnectorTagInterface {
 
     /// Must return `true` if the connector family is versioned (e.g. Postgres9, Postgres10, ...), false otherwise.
     fn is_versioned(&self) -> bool;
+
+    /// Defines where relational constraints are handled:
+    ///   - "prisma" is handled in the Query Engine core
+    ///   - "foreignKeys" lets the database handle them
+    fn referential_integrity(&self) -> &'static str {
+        "foreignKeys"
+    }
 }
 
 #[enum_dispatch(ConnectorTagInterface)]
@@ -129,6 +136,7 @@ impl TryFrom<(&str, Option<&str>)> for ConnectorTag {
         let tag = match connector.to_lowercase().as_str() {
             "sqlite" => Self::Sqlite(SqliteConnectorTag::new()),
             "sqlserver" => Self::SqlServer(SqlServerConnectorTag::new(version)?),
+            "cockroach" => Self::Postgres(PostgresConnectorTag::new(version)?),
             "postgres" => Self::Postgres(PostgresConnectorTag::new(version)?),
             "mysql" => Self::MySql(MySqlConnectorTag::new(version)?),
             "mongodb" => Self::MongoDb(MongoDbConnectorTag::new(version)?),

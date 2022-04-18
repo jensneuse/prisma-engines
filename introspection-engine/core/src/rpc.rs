@@ -1,10 +1,12 @@
 use crate::error::Error;
 use datamodel::{Configuration, Datamodel};
 use introspection_connector::{
-    ConnectorResult, DatabaseMetadata, IntrospectionConnector, IntrospectionContext, IntrospectionResultOutput,
+    CompositeTypeDepth, ConnectorResult, DatabaseMetadata, IntrospectionConnector, IntrospectionContext,
+    IntrospectionResultOutput,
 };
 use jsonrpc_core::BoxFuture;
 use jsonrpc_derive::rpc;
+use mongodb_introspection_connector::MongoDbIntrospectionConnector;
 use serde_derive::*;
 use sql_introspection_connector::SqlIntrospectionConnector;
 
@@ -12,7 +14,7 @@ type RpcError = jsonrpc_core::Error;
 type RpcResult<T> = Result<T, RpcError>;
 type RpcFutureResult<T> = BoxFuture<RpcResult<T>>;
 
-#[rpc]
+#[rpc(server)]
 pub trait Rpc {
     #[rpc(name = "listDatabases")]
     fn list_databases(&self, input: IntrospectionInput) -> RpcFutureResult<Vec<String>>;
@@ -53,7 +55,11 @@ impl Rpc for RpcImpl {
     }
 
     fn introspect(&self, input: IntrospectionInput) -> RpcFutureResult<IntrospectionResultOutput> {
-        Box::pin(Self::introspect_internal(input.schema, input.force))
+        Box::pin(Self::introspect_internal(
+            input.schema,
+            input.force,
+            CompositeTypeDepth::from(input.composite_type_depth.unwrap_or(0)),
+        ))
     }
 
     fn debug_panic(&self) -> RpcFutureResult<()> {
@@ -66,7 +72,7 @@ impl RpcImpl {
         let config = datamodel::parse_configuration(schema)
             .map_err(|diagnostics| Error::DatamodelError(diagnostics.to_pretty_string("schema.prisma", schema)))?;
 
-        let preview_features = config.subject.preview_features().map(Clone::clone).collect();
+        let preview_features = config.subject.preview_features();
 
         let connection_string = config
             .subject
@@ -76,16 +82,13 @@ impl RpcImpl {
             .load_url(|key| std::env::var(key).ok())
             .map_err(|diagnostics| Error::DatamodelError(diagnostics.to_pretty_string("schema.prisma", schema)))?;
 
-        if connection_string.starts_with("mongo") {
-            let message = r#""mongodb" provider is not supported with this command. For more info see https://www.prisma.io/docs/concepts/database-connectors/mongodb"#;
-            return Err(Error::InvalidDatabaseUrl(message.into()));
-        }
+        let connector: Box<dyn IntrospectionConnector> = if connection_string.starts_with("mongo") {
+            Box::new(MongoDbIntrospectionConnector::new(&connection_string).await?)
+        } else {
+            Box::new(SqlIntrospectionConnector::new(&connection_string, preview_features).await?)
+        };
 
-        Ok((
-            config.subject,
-            connection_string.clone(),
-            Box::new(SqlIntrospectionConnector::new(&connection_string, preview_features).await?),
-        ))
+        Ok((config.subject, connection_string.clone(), connector))
     }
 
     pub async fn catch<O>(fut: impl std::future::Future<Output = ConnectorResult<O>>) -> RpcResult<O> {
@@ -95,7 +98,11 @@ impl RpcImpl {
         }
     }
 
-    pub async fn introspect_internal(schema: String, force: bool) -> RpcResult<IntrospectionResultOutput> {
+    pub async fn introspect_internal(
+        schema: String,
+        force: bool,
+        composite_type_depth: CompositeTypeDepth,
+    ) -> RpcResult<IntrospectionResultOutput> {
         let (config, url, connector) = RpcImpl::load_connector(&schema).await?;
 
         let input_data_model = if !force {
@@ -107,8 +114,9 @@ impl RpcImpl {
         let (config2, _, _) = RpcImpl::load_connector(&schema).await?;
 
         let ctx = IntrospectionContext {
-            preview_features: config2.preview_features().map(Clone::clone).collect(),
+            preview_features: config2.preview_features(),
             source: config2.datasources.into_iter().next().unwrap(),
+            composite_type_depth,
         };
 
         let result = match connector.introspect(&input_data_model, ctx).await {
@@ -167,10 +175,13 @@ impl RpcImpl {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IntrospectionInput {
     pub(crate) schema: String,
     #[serde(default = "default_false")]
     pub(crate) force: bool,
+    #[serde(default)]
+    pub(crate) composite_type_depth: Option<isize>,
 }
 
 fn default_false() -> bool {

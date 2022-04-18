@@ -35,14 +35,12 @@ mod delete_many_rel_filter {
     }
 
     // "The delete many Mutation" should "delete the items matching the where relation filter"
-    // TODO(dom): Not working on mongo.
-    // panicked at 'assertion failed: `(left == right)`| left: `3`, right: `1`', query-engine/connector-test-kit-rs/query-engine-tests/tests/writes/filters/delete_many_rel_filter.rs:66:9
-    #[connector_test(exclude(SqlServer, MongoDb))]
-    async fn delete_items_matching_where_rel_filter(runner: &Runner) -> TestResult<()> {
-        create_row(runner, r#"{ id: 1, top: "top1"}"#).await?;
-        create_row(runner, r#"{ id: 2, top: "top2"}"#).await?;
+    #[connector_test(exclude(SqlServer))]
+    async fn delete_items_matching_where_rel_filter(runner: Runner) -> TestResult<()> {
+        create_row(&runner, r#"{ id: 1, top: "top1"}"#).await?;
+        create_row(&runner, r#"{ id: 2, top: "top2"}"#).await?;
         create_row(
-            runner,
+            &runner,
             r#"{
                   id: 3,
                   top: "top3"
@@ -53,30 +51,29 @@ mod delete_many_rel_filter {
         )
         .await?;
 
-        assert_eq!(top_count(runner).await?, 3);
+        assert_eq!(top_count(&runner).await?, 3);
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"{ findManyTop(where: { bottom: { is: null } }) { id } }"#),
+          run_query!(&runner, r#"{ findManyTop(where: { bottom: { is: null } }) { id } }"#),
           @r###"{"data":{"findManyTop":[{"id":1},{"id":2}]}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { deleteManyTop(where: { bottom: { is: null } }) { count } }"#),
+          run_query!(&runner, r#"mutation { deleteManyTop(where: { bottom: { is: null } }) { count } }"#),
           @r###"{"data":{"deleteManyTop":{"count":2}}}"###
         );
 
-        assert_eq!(top_count(runner).await?, 1);
+        assert_eq!(top_count(&runner).await?, 1);
 
         Ok(())
     }
 
-    //
     #[connector_test]
-    async fn delete_all_items_if_filter_empty(runner: &Runner) -> TestResult<()> {
-        create_row(runner, r#"{ id: 1, top: "top1"}"#).await?;
-        create_row(runner, r#"{ id: 2, top: "top2"}"#).await?;
+    async fn delete_all_items_if_filter_empty(runner: Runner) -> TestResult<()> {
+        create_row(&runner, r#"{ id: 1, top: "top1"}"#).await?;
+        create_row(&runner, r#"{ id: 2, top: "top2"}"#).await?;
         create_row(
-            runner,
+            &runner,
             r#"{
                 id: 3,
                 top: "top3"
@@ -87,27 +84,25 @@ mod delete_many_rel_filter {
         )
         .await?;
 
-        assert_eq!(top_count(runner).await?, 3);
+        assert_eq!(top_count(&runner).await?, 3);
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {deleteManyTop{count}}"#),
+          run_query!(&runner, r#"mutation {deleteManyTop{count}}"#),
           @r###"{"data":{"deleteManyTop":{"count":3}}}"###
         );
 
-        assert_eq!(top_count(runner).await?, 0);
+        assert_eq!(top_count(&runner).await?, 0);
 
         Ok(())
     }
 
     // "The delete many Mutation" should "work for deeply nested filters"
-    // TODO(dom): Not working on mongo.
-    // panicked at 'assertion failed: `(left == right)` left: `3`, right: `2`', query-engine/connector-test-kit-rs/query-engine-tests/tests/writes/filters/delete_many_rel_filter.rs:133:9
-    #[connector_test(exclude(SqlServer, MongoDb))]
-    async fn works_with_deeply_nested_filters(runner: &Runner) -> TestResult<()> {
-        create_row(runner, r#"{ id: 1, top: "top1"}"#).await?;
-        create_row(runner, r#"{ id: 2, top: "top2"}"#).await?;
+    #[connector_test(exclude(SqlServer))]
+    async fn works_with_deeply_nested_filters(runner: Runner) -> TestResult<()> {
+        create_row(&runner, r#"{ id: 1, top: "top1"}"#).await?;
+        create_row(&runner, r#"{ id: 2, top: "top2"}"#).await?;
         create_row(
-            runner,
+            &runner,
             r#"{
                 id: 3,
                 top: "top3"
@@ -122,19 +117,19 @@ mod delete_many_rel_filter {
         )
         .await?;
 
-        assert_eq!(top_count(runner).await?, 3);
+        assert_eq!(top_count(&runner).await?, 3);
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"{ findManyTop(where: { bottom: { is: { veryBottom: { is: { veryBottom: { equals: "veryBottom" }}}}}}) { id } }"#),
+          run_query!(&runner, r#"{ findManyTop(where: { bottom: { is: { veryBottom: { is: { veryBottom: { equals: "veryBottom" }}}}}}) { id } }"#),
           @r###"{"data":{"findManyTop":[{"id":3}]}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { deleteManyTop(where: { bottom: { is: { veryBottom: { is: { veryBottom: { equals: "veryBottom" }}}}}}) { count } }"#),
+          run_query!(&runner, r#"mutation { deleteManyTop(where: { bottom: { is: { veryBottom: { is: { veryBottom: { equals: "veryBottom" }}}}}}) { count } }"#),
           @r###"{"data":{"deleteManyTop":{"count":1}}}"###
         );
 
-        assert_eq!(top_count(runner).await?, 2);
+        assert_eq!(top_count(&runner).await?, 2);
 
         Ok(())
     }

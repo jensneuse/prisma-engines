@@ -9,6 +9,7 @@ use bigdecimal::BigDecimal;
 use chrono::{DateTime, FixedOffset};
 use dml::relation_info::ReferentialAction;
 use dml::scalars::ScalarType;
+use itertools::Itertools;
 use prisma_value::PrismaValue;
 use std::error;
 
@@ -222,7 +223,14 @@ impl<'a> ValueValidator<'a> {
                         vec![x]
                     }
                     [] => vec![],
-                    _ => return Err(DatamodelError::new_validation_error(&format!("DefaultValue function parsing failed. The function arg should only be empty or a single String. Got: `{:?}`. You can read about the available functions here: https://pris.ly/d/attribute-functions", args), self.span())),
+                    _ => {
+                        let msg = format!(
+                            "DefaultValue function parsing failed. The function arg should only be empty or a single String. Got: `{}`. You can read about the available functions here: https://pris.ly/d/attribute-functions",
+                            args.iter().map(|arg| format!("{}", arg)).join(",")
+                        );
+
+                        return Err(DatamodelError::new_validation_error(&msg, self.span()));
+                    }
                 };
                 let generator = self.get_value_generator(name, prisma_args)?;
 
@@ -230,11 +238,11 @@ impl<'a> ValueValidator<'a> {
                     .check_compatibility_with_scalar_type(scalar_type)
                     .map_err(|err_msg| DatamodelError::new_functional_evaluation_error(&err_msg, self.span()))?;
 
-                Ok(DefaultValue::Expression(generator))
+                Ok(DefaultValue::new_expression(generator))
             }
             _ => {
                 let x = ValueValidator::new(self.value).as_type(scalar_type)?;
-                Ok(DefaultValue::Single(x))
+                Ok(DefaultValue::new_single(x))
             }
         }
     }

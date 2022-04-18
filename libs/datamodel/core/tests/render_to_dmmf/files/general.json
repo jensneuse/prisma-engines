@@ -106,13 +106,12 @@
           "relationName": "ProfileToUser",
           "relationFromFields": [],
           "relationToFields": [],
-          "relationOnDelete": "SetNull",
           "isGenerated": false,
           "isUpdatedAt": false
         }
       ],
       "isGenerated": false,
-      "idFields": [],
+      "primaryKey": null,
       "uniqueFields": [],
       "uniqueIndexes": []
     },
@@ -139,7 +138,7 @@
           "kind": "scalar",
           "isList": false,
           "isRequired": true,
-          "isUnique": false,
+          "isUnique": true,
           "isId": false,
           "isReadOnly": true,
           "type": "Int",
@@ -164,7 +163,6 @@
           "relationToFields": [
             "id"
           ],
-          "relationOnDelete": "Cascade",
           "isGenerated": false,
           "isUpdatedAt": false
         },
@@ -183,7 +181,7 @@
         }
       ],
       "isGenerated": false,
-      "idFields": [],
+      "primaryKey": null,
       "uniqueFields": [],
       "uniqueIndexes": []
     },
@@ -303,7 +301,6 @@
           "relationToFields": [
             "id"
           ],
-          "relationOnDelete": "Cascade",
           "isGenerated": false,
           "isUpdatedAt": false
         },
@@ -325,10 +322,13 @@
         }
       ],
       "isGenerated": false,
-      "idFields": [
-        "title",
-        "createdAt"
-      ],
+      "primaryKey": {
+        "name": null,
+        "fields": [
+          "title",
+          "createdAt"
+        ]
+      },
       "uniqueFields": [],
       "uniqueIndexes": []
     },
@@ -394,7 +394,7 @@
         }
       ],
       "isGenerated": false,
-      "idFields": [],
+      "primaryKey": null,
       "uniqueFields": [],
       "uniqueIndexes": []
     },
@@ -474,7 +474,6 @@
             "title",
             "createdAt"
           ],
-          "relationOnDelete": "Cascade",
           "isGenerated": false,
           "isUpdatedAt": false
         },
@@ -495,16 +494,15 @@
           "relationToFields": [
             "id"
           ],
-          "relationOnDelete": "Cascade",
           "isGenerated": false,
           "isUpdatedAt": false
         }
       ],
       "isGenerated": false,
-      "idFields": [],
+      "primaryKey": null,
       "uniqueFields": [["postTitle", "categoryId"]],
       "uniqueIndexes": [{
-        "name": "MyUniqueIndex",
+        "name": null,
         "fields": ["postTitle", "categoryId"]
       }]
     },
@@ -531,7 +529,7 @@
           "kind": "scalar",
           "isList": false,
           "isRequired": true,
-          "isUnique": false,
+          "isUnique": true,
           "isId": false,
           "isReadOnly": true,
           "type": "Int",
@@ -556,13 +554,12 @@
           "relationToFields": [
             "id"
           ],
-          "relationOnDelete": "Cascade",
           "isGenerated": false,
           "isUpdatedAt": false
         }
       ],
       "isGenerated": false,
-      "idFields": [],
+      "primaryKey": null,
       "uniqueFields": [],
       "uniqueIndexes": []
     },
@@ -597,13 +594,115 @@
           "relationName": "AToB",
           "relationFromFields": [],
           "relationToFields": [],
-          "relationOnDelete": "SetNull",
           "isGenerated": false,
           "isUpdatedAt": false
         }
       ],
       "isGenerated": false,
-      "idFields": [],
+      "primaryKey": null,
+      "uniqueFields": [],
+      "uniqueIndexes": []
+    },
+    {
+      "name": "NamedCompounds",
+      "isEmbedded": false,
+      "dbName": null,
+      "fields": [
+        {
+          "name": "a",
+          "kind": "scalar",
+          "isList": false,
+          "isRequired": true,
+          "isUnique": false,
+          "isId": false,
+          "isReadOnly": false,
+          "type": "Int",
+          "hasDefaultValue": false,
+          "isGenerated": false,
+          "isUpdatedAt": false
+        },
+        {
+          "name": "b",
+          "kind": "scalar",
+          "isList": false,
+          "isRequired": true,
+          "isUnique": false,
+          "isId": false,
+          "isReadOnly": false,
+          "type": "Int",
+          "hasDefaultValue": false,
+          "isGenerated": false,
+          "isUpdatedAt": false
+        },
+        {
+          "name": "c",
+          "kind": "scalar",
+          "isList": false,
+          "isRequired": true,
+          "isUnique": false,
+          "isId": false,
+          "isReadOnly": false,
+          "type": "Int",
+          "hasDefaultValue": false,
+          "isGenerated": false,
+          "isUpdatedAt": false
+        },
+        {
+          "name": "d",
+          "kind": "scalar",
+          "isList": false,
+          "isRequired": true,
+          "isUnique": false,
+          "isId": false,
+          "isReadOnly": false,
+          "type": "Int",
+          "hasDefaultValue": false,
+          "isGenerated": false,
+          "isUpdatedAt": false
+        }
+      ],
+      "isGenerated": false,
+      "primaryKey": {
+        "name": "MyPrimary",
+        "fields": ["a", "b"]
+      },
+      "uniqueFields": [["c", "d"]],
+      "uniqueIndexes": [{"name":  "MyUnique", "fields":  ["c", "d"]}]
+    },
+    {
+      "name": "MappedSingles",
+      "isEmbedded": false,
+      "dbName": null,
+      "fields": [
+        {
+          "name": "a",
+          "kind": "scalar",
+          "isList": false,
+          "isRequired": true,
+          "isUnique": false,
+          "isId": true,
+          "isReadOnly": false,
+          "type": "Int",
+          "hasDefaultValue": false,
+          "isGenerated": false,
+          "isUpdatedAt": false
+        },
+        {
+          "name": "b",
+          "kind": "scalar",
+          "isList": false,
+          "isRequired": true,
+          "isUnique": true,
+          "isId": false,
+          "isReadOnly": false,
+          "type": "Int",
+          "hasDefaultValue": false,
+          "isGenerated": false,
+          "isUpdatedAt": false
+        }
+      ],
+      "isGenerated": false,
+      "primaryKey": null,
       "uniqueFields": [],
       "uniqueIndexes": []
     }

@@ -12,6 +12,7 @@ mod unchecked_nested_create {
         let schema = indoc! {
             r#"model ModelA {
               #id(id, Int, @id)
+
               b_id_1 Int
               b_id_2 Int
               c_id_1 Int?
@@ -22,6 +23,8 @@ mod unchecked_nested_create {
             }
 
             model ModelB {
+              #id(id, Int, @id)
+
               uniq_1    Int
               uniq_2    Int
 
@@ -31,6 +34,8 @@ mod unchecked_nested_create {
             }
 
             model ModelC {
+              #id(id, Int, @id)
+
               uniq_1    Int
               uniq_2    Int
 
@@ -44,15 +49,14 @@ mod unchecked_nested_create {
     }
 
     // "Unchecked nested creates" should "allow writing non-parent inlined relation scalars"
-    // TODO(dom): Not working on mongo (on createOneModelB)
-    // {"errors":[{"error":"assertion failed: id_fields.len() == 1","user_facing_error":{"is_panic":true,"message":"assertion failed: id_fields.len() == 1","backtrace":null}}]}
-    #[connector_test(schema(schema_1), exclude(MongoDb))]
-    async fn allow_write_non_prent_inline_rel_sclrs(runner: &Runner) -> TestResult<()> {
+    #[connector_test(schema(schema_1))]
+    async fn allow_write_non_prent_inline_rel_sclrs(runner: Runner) -> TestResult<()> {
         // B can't be written because it's the parent.
         assert_error!(
-            runner,
+            &runner,
             r#"mutation {
           createOneModelB(data: {
+            id: 1
             uniq_1: 1
             uniq_2: 1
             a: {
@@ -71,8 +75,9 @@ mod unchecked_nested_create {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneModelB(data: {
+              id: 2
               uniq_1: 2
               uniq_2: 2
               a: {
@@ -93,8 +98,9 @@ mod unchecked_nested_create {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneModelB(data: {
+              id: 3
               uniq_1: 3
               uniq_2: 3
               a: {
@@ -127,6 +133,7 @@ mod unchecked_nested_create {
         let schema = indoc! {
             r#"model ModelA {
               #id(id, Int, @id)
+
               b_id_1 Int
               b_id_2 Int
               c_id_1 Int
@@ -137,6 +144,8 @@ mod unchecked_nested_create {
             }
 
             model ModelB {
+              #id(id, Int, @id)
+
               uniq_1    Int
               uniq_2    Int
 
@@ -146,6 +155,8 @@ mod unchecked_nested_create {
             }
 
             model ModelC {
+              #id(id, Int, @id)
+
               uniq_1    Int
               uniq_2    Int
 
@@ -159,12 +170,13 @@ mod unchecked_nested_create {
     }
 
     // "Unchecked nested creates" should "fail if required relation scalars are not provided"
-    #[connector_test(schema(schema_2), capabilities(AnyId))]
-    async fn fail_if_req_rel_sclr_not_provided(runner: &Runner) -> TestResult<()> {
+    #[connector_test(schema(schema_2))]
+    async fn fail_if_req_rel_sclr_not_provided(runner: Runner) -> TestResult<()> {
         assert_error!(
-            runner,
+            &runner,
             r#"mutation {
               createOneModelB(data: {
+                id: 1
                 uniq_1: 1
                 uniq_2: 1
                 a: {
@@ -219,12 +231,12 @@ mod unchecked_nested_create {
 
     // "Unchecked nested creates" should "not allow writing inlined relations regularly"
     #[connector_test(schema(schema_4))]
-    async fn disallow_writing_inline_rel(runner: &Runner) -> TestResult<()> {
+    async fn disallow_writing_inline_rel(runner: Runner) -> TestResult<()> {
         // We need ModelD to trigger the correct input. We're coming from B, so B is out,
         // then we use C to trigger the union on the unchecked type, then we use d as a regular
         // relation in the input that must fail.
         assert_error!(
-            runner,
+            &runner,
             r#"mutation {
               createOneModelB(data: {
                 id: 1
@@ -281,11 +293,11 @@ mod unchecked_nested_create {
 
     // "Unchecked nested creates" should "allow writing non-parent, non-inlined relations normally"
     #[connector_test(schema(schema_5))]
-    async fn allow_write_non_parent(runner: &Runner) -> TestResult<()> {
-        run_query!(runner, r#"mutation { createOneModelD(data: { id: 1 }) { id } }"#);
+    async fn allow_write_non_parent(runner: Runner) -> TestResult<()> {
+        run_query!(&runner, r#"mutation { createOneModelD(data: { id: 1 }) { id } }"#);
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneModelB(data: {
               id: 1
               a: {
@@ -334,11 +346,11 @@ mod unchecked_nested_create {
 
     // "Unchecked nested creates" should "honor defaults and make required relation scalars optional"
     #[connector_test(schema(schema_6))]
-    async fn honor_defaults_make_req_rel_sclrs_opt(runner: &Runner) -> TestResult<()> {
-        run_query!(runner, r#"mutation { createOneModelC(data: { id: 1 }) { id } }"#);
+    async fn honor_defaults_make_req_rel_sclrs_opt(runner: Runner) -> TestResult<()> {
+        run_query!(&runner, r#"mutation { createOneModelC(data: { id: 1 }) { id } }"#);
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneModelB(data: {
               id: 1
               a: { create: { id: 1 }}
@@ -370,11 +382,10 @@ mod unchecked_nested_create {
     }
 
     // "Unchecked nested creates" should "allow to write to autoincrement IDs directly"
-    // TODO(dom): Not working on mongo. Expected because no autoincrement() ?
-    #[connector_test(schema(schema_7), exclude(SqlServer, MongoDb))]
-    async fn allow_write_autoinc_ids(runner: &Runner) -> TestResult<()> {
+    #[connector_test(schema(schema_7), capabilities(AutoIncrement, WritableAutoincField))]
+    async fn allow_write_autoinc_ids(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneModelB(data: {
               id: 1
               a: { create: { id: 2 }}

@@ -4,23 +4,27 @@
 
 mod attributes;
 mod context;
+mod indexes;
 mod names;
+mod relations;
 mod types;
 
-pub(crate) use types::ScalarFieldType;
+pub(crate) mod walkers;
 
-use self::{
-    context::Context,
-    types::{RelationField, ScalarField, Types},
-};
+// We should strive to make these private and expose that data through walkers.
+pub(crate) use types::{RelationField, ScalarField, ScalarFieldType};
+
+use self::{context::Context, relations::Relations, types::Types};
+use crate::PreviewFeature;
 use crate::{ast, diagnostics::Diagnostics, Datasource};
 use datamodel_connector::{Connector, EmptyDatamodelConnector};
+use enumflags2::BitFlags;
 use names::Names;
 
 /// ParserDatabase is a container for a Schema AST, together with information
 /// gathered during schema validation. Each validation step enriches the
 /// database with information that can be used to work with the schema, without
-/// changing the AST. Instantiating with `ParserDatabase::new()` will performa a
+/// changing the AST. Instantiating with `ParserDatabase::new()` will perform a
 /// number of validations and make sure the schema makes sense, but it cannot
 /// fail. In case the schema is invalid, diagnostics will be created and the
 /// resolved information will be incomplete.
@@ -34,6 +38,8 @@ use names::Names;
 ///   type alias, we look at the type identifier and resolve what it refers to.
 /// - The AST is walked a third time to validate attributes on models and
 ///   fields.
+/// - Global validations are then performed on the mostly validated schema.
+///   Currently only index name collisions.
 ///
 /// ## Lifetimes
 ///
@@ -47,6 +53,8 @@ pub(crate) struct ParserDatabase<'ast> {
     datasource: Option<&'ast Datasource>,
     names: Names<'ast>,
     types: Types<'ast>,
+    relations: Relations<'ast>,
+    _preview_features: BitFlags<PreviewFeature>,
 }
 
 impl<'ast> ParserDatabase<'ast> {
@@ -55,12 +63,15 @@ impl<'ast> ParserDatabase<'ast> {
         ast: &'ast ast::SchemaAst,
         datasource: Option<&'ast Datasource>,
         diagnostics: Diagnostics,
+        preview_features: BitFlags<PreviewFeature>,
     ) -> (Self, Diagnostics) {
         let db = ParserDatabase {
             ast,
             datasource,
             names: Names::default(),
             types: Types::default(),
+            relations: Relations::default(),
+            _preview_features: preview_features,
         };
 
         let mut ctx = Context::new(db, diagnostics);
@@ -81,10 +92,19 @@ impl<'ast> ParserDatabase<'ast> {
             return ctx.finish();
         }
 
-        // Third pass: validate model and field attributes.
-        for (model_id, model) in ast.iter_models() {
-            attributes::resolve_model_attributes(model_id, model, &mut ctx)
-        }
+        // Third pass: validate model and field attributes. All these
+        // validations should be _order independent_ and only rely on
+        // information from previous steps, not from other attributes.
+        attributes::resolve_attributes(&mut ctx);
+
+        // Fourth step: global validations
+        attributes::fill_in_default_constraint_names(&mut ctx);
+
+        // Fifth step: relation inference
+        relations::infer_relations(&mut ctx);
+
+        // Sixth step: infering implicit indices
+        indexes::infer_implicit_indexes(&mut ctx);
 
         ctx.finish()
     }
@@ -106,56 +126,19 @@ impl<'ast> ParserDatabase<'ast> {
     }
 
     pub(crate) fn get_enum_database_name(&self, enum_id: ast::EnumId) -> Option<&'ast str> {
-        self.types.enums[&enum_id].mapped_name
+        self.types.enum_attributes[&enum_id].mapped_name
     }
 
     pub(crate) fn get_enum_value_database_name(&self, enum_id: ast::EnumId, value_idx: u32) -> Option<&'ast str> {
-        self.types.enums[&enum_id].mapped_values.get(&value_idx).cloned()
-    }
-
-    pub(crate) fn get_model_database_name(&self, model_id: ast::ModelId) -> Option<&'ast str> {
-        self.types.models[&model_id].mapped_name
-    }
-
-    pub(crate) fn get_field_database_name(&self, model_id: ast::ModelId, field_id: ast::FieldId) -> Option<&'ast str> {
-        self.types.scalar_fields[&(model_id, field_id)].mapped_name
-    }
-
-    pub(crate) fn get_model_data(&self, model_id: &ast::ModelId) -> Option<&types::ModelData<'ast>> {
-        self.types.models.get(model_id)
+        self.types.enum_attributes[&enum_id]
+            .mapped_values
+            .get(&value_idx)
+            .cloned()
     }
 
     pub(super) fn active_connector(&self) -> &dyn Connector {
         self.datasource
             .map(|datasource| datasource.active_connector.as_ref())
             .unwrap_or(&EmptyDatamodelConnector)
-    }
-
-    /// Iterate all the relation fields in a given model in the order they were
-    /// defined. Note that these are only the fields that were actually written
-    /// in the schema.
-    pub(crate) fn iter_model_relation_fields(
-        &self,
-        model_id: ast::ModelId,
-    ) -> impl Iterator<Item = (ast::FieldId, &RelationField<'ast>)> + '_ {
-        self.types
-            .relation_fields
-            .range((model_id, ast::FieldId::ZERO)..=(model_id, ast::FieldId::MAX))
-            .map(|((_, field_id), rf)| (*field_id, rf))
-    }
-
-    /// Iterate all the scalar fields in a given model in the order they were defined.
-    pub(crate) fn iter_model_scalar_fields(
-        &self,
-        model_id: ast::ModelId,
-    ) -> impl Iterator<Item = (ast::FieldId, &ScalarField<'ast>)> {
-        self.types
-            .scalar_fields
-            .range((model_id, ast::FieldId::ZERO)..=(model_id, ast::FieldId::MAX))
-            .map(|((_, field_id), scalar_type)| (*field_id, scalar_type))
-    }
-
-    pub(super) fn get_enum(&self, name: &str) -> Option<&'ast ast::Enum> {
-        self.names.tops.get(name).and_then(|top_id| self.ast[*top_id].as_enum())
     }
 }

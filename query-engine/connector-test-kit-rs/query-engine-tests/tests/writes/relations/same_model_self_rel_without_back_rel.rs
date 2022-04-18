@@ -9,9 +9,10 @@ mod self_rel_no_back_rel {
         let schema = indoc! {
             r#"model Post {
               #id(id, String, @id)
-              identifier Int?   @unique
-              related    Post[] @relation(name: "RelatedPosts")
-              parents    Post[] @relation(name: "RelatedPosts")
+              identifier Int? @unique
+
+              #m2m(related, Post[], String, RelatedPosts)
+              #m2m(parents, Post[], String, RelatedPosts)
             }"#
         };
 
@@ -20,16 +21,13 @@ mod self_rel_no_back_rel {
 
     // "A Many to Many Self Relation" should "be accessible from only one side"
     // Bring back sql server when cascading rules can be set!
-    // TODO(dom): Not working on mongo (both snapshots)
-    //-{"data":{"findUniquePost":{"identifier":1,"related":[{"identifier":2}]}}}
-    //{"errors":[{"error":"called `Option::unwrap()` on a `None` value","user_facing_error":{"is_panic":true,"message":"called `Option::unwrap()` on a `None` value","backtrace":null}}]}
-    #[connector_test(exclude(SqlServer, MongoDb))]
-    async fn m2m_self_rel(runner: &Runner) -> TestResult<()> {
-        create_row(runner, r#"{id: "1", identifier: 1}"#).await?;
-        create_row(runner, r#"{id: "2", identifier: 2}"#).await?;
+    #[connector_test]
+    async fn m2m_self_rel(runner: Runner) -> TestResult<()> {
+        create_row(&runner, r#"{id: "1", identifier: 1}"#).await?;
+        create_row(&runner, r#"{id: "2", identifier: 2}"#).await?;
 
         run_query!(
-            runner,
+            &runner,
             r#"mutation {
             updateOnePost (
               where:{ identifier: 1 }
@@ -47,12 +45,12 @@ mod self_rel_no_back_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"{findUniquePost(where:{identifier: 1}){identifier, related{identifier}}}"#),
+          run_query!(&runner, r#"{findUniquePost(where:{identifier: 1}){identifier, related{identifier}}}"#),
           @r###"{"data":{"findUniquePost":{"identifier":1,"related":[{"identifier":2}]}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"{findUniquePost(where:{identifier: 2}){identifier, related{identifier}}}"#),
+          run_query!(&runner, r#"{findUniquePost(where:{identifier: 2}){identifier, related{identifier}}}"#),
           @r###"{"data":{"findUniquePost":{"identifier":2,"related":[]}}}"###
         );
 
@@ -62,11 +60,11 @@ mod self_rel_no_back_rel {
     fn schema_2() -> String {
         let schema = indoc! {
             r#"model Post {
-              #id(id, String, @id)
-              identifier Int?   @unique
+              #id(id, String, @id, @default(cuid()))
+              identifier Int?    @unique
               relatedId  String?
 
-              related    Post?  @relation(name: "RelatedPosts", fields:[relatedId], references: [id])
+              related    Post?  @relation(name: "RelatedPosts", fields:[relatedId], references: [id], onDelete: NoAction, onUpdate: NoAction)
               parents    Post[] @relation(name: "RelatedPosts")
             }"#
         };
@@ -75,13 +73,12 @@ mod self_rel_no_back_rel {
     }
 
     // "A One to One Self Relation" should "be accessible from only one side"
-    // TODO: Why is it failing to migrate the dm in rust but not in Scala for MSSQL??
-    #[connector_test(schema(schema_2), exclude(SqlServer))]
-    async fn one2one_self_rel(runner: &Runner) -> TestResult<()> {
-        create_row(runner, r#"{id: "1", identifier: 1}"#).await?;
-        create_row(runner, r#"{id: "2", identifier: 2}"#).await?;
+    #[connector_test(schema(schema_2))]
+    async fn one2one_self_rel(runner: Runner) -> TestResult<()> {
+        create_row(&runner, r#"{id: "1", identifier: 1}"#).await?;
+        create_row(&runner, r#"{id: "2", identifier: 2}"#).await?;
         run_query!(
-            runner,
+            &runner,
             r#"mutation {
           updateOnePost (
             where:{identifier: 1}
@@ -99,12 +96,12 @@ mod self_rel_no_back_rel {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"{findUniquePost(where:{identifier: 1}){identifier, related{identifier}}}"#),
+          run_query!(&runner, r#"{findUniquePost(where:{identifier: 1}){identifier, related{identifier}}}"#),
           @r###"{"data":{"findUniquePost":{"identifier":1,"related":{"identifier":2}}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"{findUniquePost(where:{identifier: 2}){identifier, related{identifier}}}"#),
+          run_query!(&runner, r#"{findUniquePost(where:{identifier: 2}){identifier, related{identifier}}}"#),
           @r###"{"data":{"findUniquePost":{"identifier":2,"related":null}}}"###
         );
 

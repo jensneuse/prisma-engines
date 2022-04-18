@@ -14,6 +14,9 @@ pub trait GenericApi: Send + Sync + 'static {
     /// Apply all the unapplied migrations from the migrations folder.
     async fn apply_migrations(&self, input: &ApplyMigrationsInput) -> CoreResult<ApplyMigrationsOutput>;
 
+    /// Create the database referenced by Prisma schema that was used to initialize the connector.
+    async fn create_database(&self) -> CoreResult<String>;
+
     /// Generate a new migration, based on the provided schema and existing migrations history.
     async fn create_migration(&self, input: &CreateMigrationInput) -> CoreResult<CreateMigrationOutput>;
 
@@ -23,11 +26,19 @@ pub trait GenericApi: Send + Sync + 'static {
     /// Tells the CLI what to do in `migrate dev`.
     async fn dev_diagnostic(&self, input: &DevDiagnosticInput) -> CoreResult<DevDiagnosticOutput>;
 
+    /// Drop the database referenced by Prisma schema that was used to initialize the connector.
+    async fn drop_database(&self) -> CoreResult<()>;
+
     /// Looks at the migrations folder and the database, and returns a bunch of useful information.
     async fn diagnose_migration_history(
         &self,
         input: &DiagnoseMigrationHistoryInput,
     ) -> CoreResult<DiagnoseMigrationHistoryOutput>;
+
+    /// Make sure the connection to the database is established and valid.
+    /// Connectors can choose to connect lazily, but this method should force
+    /// them to connect.
+    async fn ensure_connection_validity(&self) -> CoreResult<()>;
 
     /// Evaluate the consequences of running the next migration we would generate, given the current state of a Prisma schema.
     async fn evaluate_data_loss(&self, input: &EvaluateDataLossInput) -> CoreResult<EvaluateDataLossOutput>;
@@ -48,18 +59,22 @@ pub trait GenericApi: Send + Sync + 'static {
         input: &MarkMigrationRolledBackInput,
     ) -> CoreResult<MarkMigrationRolledBackOutput>;
 
-    /// Prepare to create a migration.
-    async fn plan_migration(&self) -> CoreResult<()>;
-
     /// Reset a database to an empty state (no data, no schema).
     async fn reset(&self) -> CoreResult<()>;
 
     /// The command behind `prisma db push`.
     async fn schema_push(&self, input: &SchemaPushInput) -> CoreResult<SchemaPushOutput>;
+
+    /// Access to the migration connector.
+    fn connector(&self) -> &dyn MigrationConnector;
 }
 
 #[async_trait::async_trait]
 impl<C: MigrationConnector> GenericApi for C {
+    fn connector(&self) -> &dyn MigrationConnector {
+        self
+    }
+
     async fn version(&self) -> CoreResult<String> {
         Ok(self.version().await?)
     }
@@ -68,6 +83,10 @@ impl<C: MigrationConnector> GenericApi for C {
         apply_migrations(input, self)
             .instrument(tracing::info_span!("ApplyMigrations"))
             .await
+    }
+
+    async fn create_database(&self) -> CoreResult<String> {
+        MigrationConnector::create_database(self).await
     }
 
     async fn create_migration(&self, input: &CreateMigrationInput) -> CoreResult<CreateMigrationOutput> {
@@ -97,6 +116,14 @@ impl<C: MigrationConnector> GenericApi for C {
         diagnose_migration_history(input, self)
             .instrument(tracing::info_span!("DiagnoseMigrationHistory"))
             .await
+    }
+
+    async fn drop_database(&self) -> CoreResult<()> {
+        MigrationConnector::drop_database(self).await
+    }
+
+    async fn ensure_connection_validity(&self) -> CoreResult<()> {
+        MigrationConnector::ensure_connection_validity(self).await
     }
 
     async fn evaluate_data_loss(&self, input: &EvaluateDataLossInput) -> CoreResult<EvaluateDataLossOutput> {
@@ -142,10 +169,6 @@ impl<C: MigrationConnector> GenericApi for C {
                 migration_name = input.migration_name.as_str()
             ))
             .await
-    }
-
-    async fn plan_migration(&self) -> CoreResult<()> {
-        unreachable!("PlanMigration command")
     }
 
     async fn reset(&self) -> CoreResult<()> {

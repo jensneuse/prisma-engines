@@ -57,9 +57,9 @@ mod compound_uniq_rel_field {
     //  nested updateM | -      | not possible (1!:1)
     // "Using a compound unique that includes a 1!:1 single-field relation" should "work"
     #[connector_test(schema(schema_1))]
-    async fn compound_uniq_with_1_1_single_rel(runner: &Runner) -> TestResult<()> {
+    async fn compound_uniq_with_1_1_single_rel(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: { id: 1, p: "Parent1", child: { create: { id: 1, c: "Child1" }}}) {
               p
               child {
@@ -71,7 +71,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(where: { child_id_p: { child_id: 1, p: "Parent1" } } data: { p: { set: "UpdatedParent1" }}) {
               p
             }
@@ -80,7 +80,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(where: { id: 1 } data: { parent: { update: { p: { set: "UpdateParent1FromChild" }}}}) {
               parent { p }
             }
@@ -89,7 +89,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             upsertOneParent(
               where: { child_id_p: { child_id: 2, p: "Parent2" } }
               update: { p: { set: "doesn't matter" }}
@@ -102,7 +102,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             deleteOneParent(
               where: {
                 child_id_p: { child_id: 2, p: "Parent2" }
@@ -115,7 +115,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(
               data: {
                 id: 2
@@ -137,7 +137,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 3
@@ -151,7 +151,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(
               where: {
                 child_id_p: { child_id: 2, p: "Parent2New" }
@@ -173,7 +173,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -202,7 +202,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -267,12 +267,10 @@ mod compound_uniq_rel_field {
     //  nested deleteM | -      | not possible (1!:1)
     //  nested updateM | -      | not possible (1!:1)
     // "Using a compound unique that includes a 1!:1 multi-field relation"
-    // TODO(dom): Not working on mongo.
-    // {"errors":[{"error":"not implemented: Compound filter case.","user_facing_error":{"is_panic":true,"message":"not implemented: Compound filter case.","backtrace":null}}]}
-    #[connector_test(schema(schema_2), exclude(MongoDb))]
-    async fn compound_uniq_with_1_1_multi_rel(runner: &Runner) -> TestResult<()> {
+    #[connector_test(schema(schema_2))]
+    async fn compound_uniq_with_1_1_multi_rel(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: { id: 1, p: "Parent1", child: { create: { id: 1, c: "Child1" }}}) {
               p
               child {
@@ -284,7 +282,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(where: { child_id_child_c_p: { child_id: 1, child_c: "Child1", p: "Parent1" } } data: { p: { set: "UpdatedParent1" }}) {
               p
             }
@@ -293,7 +291,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(where: { id: 1 } data: { parent: { update: { p: { set: "UpdateParent1FromChild" }}}}) {
               parent { p }
             }
@@ -302,7 +300,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             upsertOneParent(
               where: { child_id_child_c_p: { child_id: 2, child_c: "Child2", p: "Parent2" } }
               update: { p: { set: "doesn't matter" }}
@@ -315,7 +313,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             deleteOneParent(
               where: {
                 child_id_child_c_p: { child_id: 2, child_c: "Child2", p: "Parent2" }
@@ -328,7 +326,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(
               data: {
                 id: 2
@@ -350,7 +348,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 3
@@ -364,7 +362,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(
               where: {
                 child_id_child_c_p: { child_id: 2, child_c: "Child2", p: "Parent2New" }
@@ -386,7 +384,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 4
@@ -400,7 +398,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 4 }
               data: {
@@ -430,7 +428,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -495,9 +493,9 @@ mod compound_uniq_rel_field {
     //  nested set     | -      | not (really) possible (1!:m)
     // "Using a compound unique that includes a 1!:M single-field relation"
     #[connector_test(schema(schema_3))]
-    async fn compound_uniq_with_1_m_single_rel(runner: &Runner) -> TestResult<()> {
+    async fn compound_uniq_with_1_m_single_rel(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: { id: 1, p: "Parent1", child: { create: { id: 1, c: "Child1" }}}) {
               p
               child {
@@ -510,7 +508,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(where: { child_id_p: { child_id: 1, p: "Parent1" } } data: { p: { set: "Parent1Updated" }}) {
               p
             }
@@ -519,7 +517,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 1 }
               data: {
@@ -540,7 +538,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             upsertOneParent(
               where: { child_id_p: { child_id: 2, p: "Parent2" } }
               update: { p: { set: "doesn't matter" }}
@@ -553,7 +551,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             deleteOneParent(
               where: { child_id_p: { child_id: 2, p: "Parent2" } }
             ) {
@@ -564,7 +562,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(
               data: {
                 id: 2
@@ -586,7 +584,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 3
@@ -600,7 +598,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(
               where: { child_id_p: { child_id: 2, p: "Parent2New" } }
               data: {
@@ -620,7 +618,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 4
@@ -634,7 +632,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 4 }
               data: {
@@ -660,7 +658,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -685,7 +683,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -752,12 +750,10 @@ mod compound_uniq_rel_field {
     //  nested disconn | -      | not possible (1!:m)
     //  nested set     | -      | not (really) possible (1!:m)
     // "Using a compound unique that includes a 1!:M multi-field relation"
-    // TODO(dom): Not working on mongo.
-    // {"errors":[{"error":"not implemented: Compound filter case.","user_facing_error":{"is_panic":true,"message":"not implemented: Compound filter case.","backtrace":null}}]}
-    #[connector_test(schema(schema_4), exclude(MongoDb))]
-    async fn compound_uniq_with_1_m_multi_rel(runner: &Runner) -> TestResult<()> {
+    #[connector_test(schema(schema_4))]
+    async fn compound_uniq_with_1_m_multi_rel(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(data: { id: 1, p: "Parent1", child: { create: { id: 1, c: "Child1" }}}) {
               p
               child {
@@ -770,7 +766,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(where: { child_id_child_c_p: { child_id: 1, child_c: "Child1", p: "Parent1" } } data: { p: { set: "Parent1Updated" }}) {
               p
             }
@@ -779,7 +775,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(where: { id: 1 } data: {
               parents: {
                  updateMany: {
@@ -797,7 +793,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             upsertOneParent(
               where: { child_id_child_c_p: { child_id: 2, child_c: "Child2", p: "Parent2" } }
               update: { p: { set: "doesn't matter" }}
@@ -810,7 +806,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             deleteOneParent(
               where: { child_id_child_c_p: { child_id: 2, child_c: "Child2", p: "Parent2" } }
             ) {
@@ -821,7 +817,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneParent(
               data: {
                 id: 2
@@ -843,7 +839,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 3
@@ -857,7 +853,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneParent(
               where: { child_id_child_c_p: { child_id: 2, child_c: "Child2", p: "Parent2New" } }
               data: {
@@ -877,7 +873,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             createOneChild(
               data: {
                 id: 4
@@ -891,7 +887,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 4 }
               data: {
@@ -917,7 +913,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -942,7 +938,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation {
+          run_query!(&runner, r#"mutation {
             updateOneChild(
               where: { id: 3 }
               data: {
@@ -990,18 +986,18 @@ mod compound_uniq_rel_field {
 
     // "Using compounds uniques that use the same field names in different models"
     #[connector_test(schema(schema_5))]
-    async fn compound_uniq_same_field_diff_models(runner: &Runner) -> TestResult<()> {
+    async fn compound_uniq_same_field_diff_models(runner: Runner) -> TestResult<()> {
         run_query!(
-            runner,
+            &runner,
             r#" mutation { createOneModelA(data: { id: 1, fieldA: "a", fieldB: "b" }) { id } }"#
         );
         run_query!(
-            runner,
+            &runner,
             r#"mutation { createOneModelB(data: { id: 1, fieldA: 1, fieldB: 2 }) { id } }"#
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"{
+          run_query!(&runner, r#"{
             findUniqueModelA(where: {
               fieldA_fieldB: {
                 fieldA: "a",
@@ -1013,7 +1009,7 @@ mod compound_uniq_rel_field {
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"{
+          run_query!(&runner, r#"{
             findUniqueModelB(where: {
               fieldA_fieldB: {
                 fieldA: 1,

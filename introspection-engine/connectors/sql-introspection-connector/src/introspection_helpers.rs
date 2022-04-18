@@ -76,7 +76,7 @@ fn common_prisma_m_to_n_relation_conditions(table: &Table) -> bool {
             i.columns.len() == 2
                 && is_a(&i.columns[0])
                 && is_b(&i.columns[1])
-                && i.tpe == IndexType::Unique
+                && i.is_unique()
         })
         //INDEX [B]
         && table
@@ -102,12 +102,12 @@ pub fn calculate_many_to_many_field(
 ) -> RelationField {
     let relation_info = RelationInfo {
         name: relation_name,
+        fk_name: None,
         fields: vec![],
         to: opposite_foreign_key.referenced_table.clone(),
         references: opposite_foreign_key.referenced_columns.clone(),
         on_delete: None,
         on_update: None,
-        legacy_referential_actions: false,
     };
 
     let basename = opposite_foreign_key.referenced_table.clone();
@@ -127,10 +127,17 @@ pub(crate) fn calculate_index(index: &Index) -> IndexDefinition {
         IndexType::Normal => datamodel::dml::IndexType::Normal,
     };
 
+    //We do not populate name in client by default. It increases datamodel noise,
+    //and we would need to sanitize it. Users can give their own names if they want
+    //and re-introspection will keep them. This is a change in introspection behaviour,
+    //but due to re-introspection previous datamodels and clients should keep working as before.
+
     IndexDefinition {
-        name: Some(index.name.clone()),
+        name: None,
+        db_name: Some(index.name.clone()),
         fields: index.columns.clone(),
         tpe,
+        defined_on_field: index.columns.len() == 1,
     }
 }
 
@@ -149,16 +156,12 @@ pub(crate) fn calculate_scalar_field(table: &Table, column: &Column, ctx: &Intro
 
     let default_value = calculate_default(table, column, &arity);
 
-    let is_unique = table.is_column_unique(&column.name) && !is_id;
-
     ScalarField {
         name: column.name.clone(),
         arity,
         field_type,
         database_name: None,
         default_value,
-        is_unique,
-        is_id,
         documentation: None,
         is_generated: false,
         is_updated_at: false,
@@ -171,6 +174,7 @@ pub(crate) fn calculate_relation_field(
     schema: &SqlSchema,
     table: &Table,
     foreign_key: &ForeignKey,
+    m2m_table_names: &[String],
 ) -> Result<RelationField, SqlError> {
     debug!("Handling foreign key  {:?}", foreign_key);
 
@@ -183,13 +187,13 @@ pub(crate) fn calculate_relation_field(
     };
 
     let relation_info = RelationInfo {
-        name: calculate_relation_name(schema, foreign_key, table)?,
+        name: calculate_relation_name(schema, foreign_key, table, m2m_table_names)?,
+        fk_name: foreign_key.constraint_name.clone(),
         fields: foreign_key.columns.clone(),
         to: foreign_key.referenced_table.clone(),
         references: foreign_key.referenced_columns.clone(),
         on_delete: Some(map_action(foreign_key.on_delete_action)),
         on_update: Some(map_action(foreign_key.on_update_action)),
-        legacy_referential_actions: false,
     };
 
     let columns: Vec<&Column> = foreign_key
@@ -230,19 +234,19 @@ pub(crate) fn calculate_backrelation_field(
         Ok(table) => {
             let new_relation_info = RelationInfo {
                 name: relation_info.name.clone(),
+                fk_name: None,
                 to: model.name.clone(),
                 fields: vec![],
                 references: vec![],
                 on_delete: None,
                 on_update: None,
-                legacy_referential_actions: false,
             };
 
             // unique or id
             let other_is_unique = table
                 .indices
                 .iter()
-                .any(|i| columns_match(&i.columns, &relation_info.fields) && i.tpe == IndexType::Unique)
+                .any(|i| columns_match(&i.columns, &relation_info.fields) && i.is_unique())
                 || columns_match(&table.primary_key_columns(), &relation_info.fields);
 
             let arity = match relation_field.arity {
@@ -266,20 +270,35 @@ pub(crate) fn calculate_backrelation_field(
 pub(crate) fn calculate_default(table: &Table, column: &Column, arity: &FieldArity) -> Option<DMLDef> {
     match (column.default.as_ref().map(|d| d.kind()), &column.tpe.family) {
         (_, _) if *arity == FieldArity::List => None,
-        (_, ColumnTypeFamily::Int) if column.auto_increment => Some(DMLDef::Expression(VG::new_autoincrement())),
-        (_, ColumnTypeFamily::BigInt) if column.auto_increment => Some(DMLDef::Expression(VG::new_autoincrement())),
-        (_, ColumnTypeFamily::Int) if is_sequence(column, table) => Some(DMLDef::Expression(VG::new_autoincrement())),
+        (_, ColumnTypeFamily::Int) if column.auto_increment => Some(DMLDef::new_expression(VG::new_autoincrement())),
+        (_, ColumnTypeFamily::BigInt) if column.auto_increment => Some(DMLDef::new_expression(VG::new_autoincrement())),
+        (_, ColumnTypeFamily::Int) if is_sequence(column, table) => {
+            Some(DMLDef::new_expression(VG::new_autoincrement()))
+        }
         (_, ColumnTypeFamily::BigInt) if is_sequence(column, table) => {
-            Some(DMLDef::Expression(VG::new_autoincrement()))
+            Some(DMLDef::new_expression(VG::new_autoincrement()))
         }
-        (Some(DefaultKind::Sequence(_)), _) => Some(DMLDef::Expression(VG::new_autoincrement())),
-        (Some(DefaultKind::Now), ColumnTypeFamily::DateTime) => Some(DMLDef::Expression(VG::new_now())),
-        (Some(DefaultKind::DbGenerated(default_string)), _) => {
-            Some(DMLDef::Expression(VG::new_dbgenerated(default_string.clone())))
+        (Some(DefaultKind::Sequence(_)), _) => Some(DMLDef::new_expression(VG::new_autoincrement())),
+        (Some(DefaultKind::Now), ColumnTypeFamily::DateTime) => {
+            Some(set_default(DMLDef::new_expression(VG::new_now()), column))
         }
-        (Some(DefaultKind::Value(val)), _) => Some(DMLDef::Single(val.clone())),
+        (Some(DefaultKind::DbGenerated(default_string)), _) => Some(set_default(
+            DMLDef::new_expression(VG::new_dbgenerated(default_string.clone())),
+            column,
+        )),
+        (Some(DefaultKind::Value(val)), _) => Some(set_default(DMLDef::new_single(val.clone()), column)),
         _ => None,
     }
+}
+
+fn set_default(mut default: DMLDef, column: &Column) -> DMLDef {
+    let db_name = column.default.as_ref().and_then(|df| df.constraint_name());
+
+    if let Some(name) = db_name {
+        default.set_db_name(name);
+    }
+
+    default
 }
 
 pub(crate) fn is_id(column: &Column, table: &Table) -> bool {
@@ -298,7 +317,12 @@ pub(crate) fn is_sequence(column: &Column, table: &Table) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn calculate_relation_name(schema: &SqlSchema, fk: &ForeignKey, table: &Table) -> Result<String, SqlError> {
+pub(crate) fn calculate_relation_name(
+    schema: &SqlSchema,
+    fk: &ForeignKey,
+    table: &Table,
+    m2m_table_names: &[String],
+) -> Result<String, SqlError> {
     //this is not called for prisma many to many relations. for them the name is just the name of the join table.
     let referenced_model = &fk.referenced_table;
     let model_with_fk = &table.name;
@@ -323,8 +347,14 @@ pub(crate) fn calculate_relation_name(schema: &SqlSchema, fk: &ForeignKey, table
                 .iter()
                 .any(|fk| &fk.referenced_table == model_with_fk);
 
-            let name = if fk_to_same_model.len() < 2 && !fk_from_other_model_to_this_exist {
-                RelationNames::name_for_unambiguous_relation(model_with_fk, referenced_model)
+            let unambiguous_name = RelationNames::name_for_unambiguous_relation(model_with_fk, referenced_model);
+
+            // this needs to know whether there are m2m relations and then use ambiguous name path
+            let name = if fk_to_same_model.len() < 2
+                && !fk_from_other_model_to_this_exist
+                && !m2m_table_names.contains(&unambiguous_name)
+            {
+                unambiguous_name
             } else {
                 RelationNames::name_for_ambiguous_relation(model_with_fk, referenced_model, &fk_column_name)
             };

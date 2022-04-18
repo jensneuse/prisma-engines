@@ -14,6 +14,9 @@ pub fn init(mut exports: JsObject, env: Env) -> napi::Result<()> {
             Property::new(&env, "disconnect")?.with_method(engine::disconnect),
             Property::new(&env, "query")?.with_method(engine::query),
             Property::new(&env, "sdlSchema")?.with_method(engine::sdl_schema),
+            Property::new(&env, "startTransaction")?.with_method(engine::start_transaction),
+            Property::new(&env, "commitTransaction")?.with_method(engine::commit_transaction),
+            Property::new(&env, "rollbackTransaction")?.with_method(engine::rollback_transaction),
         ],
     )?;
 
@@ -21,6 +24,7 @@ pub fn init(mut exports: JsObject, env: Env) -> napi::Result<()> {
     exports.create_named_method("version", functions::version)?;
     exports.create_named_method("getConfig", functions::get_config)?;
     exports.create_named_method("dmmf", functions::dmmf)?;
+    exports.create_named_method("debugPanic", functions::debug_panic)?;
 
     Ok(())
 }

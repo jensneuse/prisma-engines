@@ -1,5 +1,8 @@
 use crate::SqlFamilyTrait;
-use datamodel::{reserved_model_names, Datamodel, DefaultValue, Field, FieldType, Model, WithDatabaseName, WithName};
+use datamodel::{
+    reserved_model_names::is_reserved_type_name, Datamodel, DefaultKind, DefaultValue, Field, FieldType, Model,
+    ValueGenerator, WithDatabaseName, WithName,
+};
 use introspection_connector::IntrospectionContext;
 use once_cell::sync::Lazy;
 use prisma_value::PrismaValue;
@@ -13,7 +16,7 @@ static RE_START: Lazy<Regex> = Lazy::new(|| Regex::new("^[^a-zA-Z]+").unwrap());
 static RE: Lazy<Regex> = Lazy::new(|| Regex::new("[^_a-zA-Z0-9]").unwrap());
 
 pub fn sanitize_datamodel_names(datamodel: &mut Datamodel, ctx: &IntrospectionContext) {
-    let enum_renames = sanitize_models(datamodel, &ctx);
+    let enum_renames = sanitize_models(datamodel, ctx);
     sanitize_enums(datamodel, &enum_renames);
 }
 
@@ -48,7 +51,9 @@ fn sanitize_models(datamodel: &mut Datamodel, ctx: &IntrospectionContext) -> Has
         let model_name = model.name().to_owned();
         let model_db_name = model.database_name().map(|s| s.to_owned());
 
-        model.id_fields = sanitize_strings(model.id_fields.as_slice());
+        if let Some(pk) = &mut model.primary_key {
+            pk.fields = sanitize_strings(pk.fields.as_slice());
+        }
 
         for field in model.fields_mut() {
             sanitize_name(field);
@@ -93,15 +98,19 @@ fn sanitize_models(datamodel: &mut Datamodel, ctx: &IntrospectionContext) -> Has
 
                         // If the field also has an associated default enum value, we need to sanitize that enum value.
                         // The actual enum value renames _in the enum itself_ are done at a later stage.
-                        if let Some(DefaultValue::Single(PrismaValue::Enum(value))) = &mut sf.default_value {
+                        if let Some(DefaultKind::Single(PrismaValue::Enum(value))) =
+                            sf.default_value.as_mut().map(|dv| dv.mut_kind())
+                        {
                             let new_default = if value.is_empty() {
-                                DefaultValue::Single(PrismaValue::Enum(EMPTY_ENUM_PLACEHOLDER.to_string()))
+                                DefaultValue::new_single(PrismaValue::Enum(EMPTY_ENUM_PLACEHOLDER.to_string()))
                             } else {
                                 let sanitized_value = sanitize_string(value);
 
                                 match sanitized_value {
-                                    x if x.is_empty() => DefaultValue::new_db_generated(value.clone()),
-                                    _ => DefaultValue::Single(PrismaValue::Enum(sanitized_value)),
+                                    x if x.is_empty() => {
+                                        DefaultValue::new_expression(ValueGenerator::new_dbgenerated(value.clone()))
+                                    }
+                                    _ => DefaultValue::new_single(PrismaValue::Enum(sanitized_value)),
                                 }
                             };
 
@@ -109,6 +118,7 @@ fn sanitize_models(datamodel: &mut Datamodel, ctx: &IntrospectionContext) -> Has
                         };
                     }
                 }
+                Field::CompositeField(_) => todo!(),
             }
         }
 
@@ -208,9 +218,7 @@ fn rename_reserved(model: &mut Model) {
 
 /// Reformats a reserved string as "Renamed{}"
 fn reformat_reserved_string(s: &str) -> String {
-    let validator = reserved_model_names::TypeNameValidator::new();
-
-    if validator.is_reserved(s) {
+    if is_reserved_type_name(s) {
         format!("Renamed{}", s)
     } else {
         s.to_owned()

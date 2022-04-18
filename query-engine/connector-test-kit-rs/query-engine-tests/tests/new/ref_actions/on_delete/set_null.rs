@@ -1,9 +1,9 @@
-//! Only Postgres allows SetNull on a non-nullable FK at all, rest fail during migration.
+//! Only Postgres (except CockroachDB) allows SetNull on a non-nullable FK at all, rest fail during migration.
 
 use indoc::indoc;
 use query_engine_tests::*;
 
-#[test_suite(suite = "setnull_onD_1to1_req", schema(required), only(Postgres))]
+#[test_suite(suite = "setnull_onD_1to1_req", schema(required), only(Postgres), exclude(Cockroach))]
 mod one2one_req {
     fn required() -> String {
         let schema = indoc! {
@@ -24,9 +24,9 @@ mod one2one_req {
 
     /// Deleting the parent must fail if a child is connected (because of null key violation).
     #[connector_test]
-    async fn delete_parent_failure(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent_failure(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1, child: { create: { id: 1 }}}) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1, child: { create: { id: 1 }}}) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
@@ -70,19 +70,19 @@ mod one2one_opt {
 
     /// Deleting the parent suceeds and sets the FK null.
     #[connector_test]
-    async fn delete_parent(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1, child: { create: { id: 1 }}}) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1, child: { create: { id: 1 }}}) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { deleteOneParent(where: { id: 1 }) { id }}"#),
+          run_query!(&runner, r#"mutation { deleteOneParent(where: { id: 1 }) { id }}"#),
           @r###"{"data":{"deleteOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"query { findManyChild { id parent_id }}"#),
+          run_query!(&runner, r#"query { findManyChild { id parent_id }}"#),
           @r###"{"data":{"findManyChild":[{"id":1,"parent_id":null}]}}"###
         );
 
@@ -90,7 +90,7 @@ mod one2one_opt {
     }
 }
 
-#[test_suite(suite = "setnull_onD_1toM_req", schema(required), only(Postgres))]
+#[test_suite(suite = "setnull_onD_1toM_req", schema(required), only(Postgres), exclude(Cockroach))]
 mod one2many_req {
     fn required() -> String {
         let schema = indoc! {
@@ -111,9 +111,9 @@ mod one2many_req {
 
     /// Deleting the parent must fail if a child is connected (because of null key violation).
     #[connector_test]
-    async fn delete_parent_failure(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent_failure(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1, children: { create: { id: 1 }}}) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1, children: { create: { id: 1 }}}) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
@@ -157,19 +157,19 @@ mod one2many_opt {
 
     /// Deleting the parent suceeds and sets the FK null.
     #[connector_test]
-    async fn delete_parent(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1, children: { create: { id: 1 }}}) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1, children: { create: { id: 1 }}}) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { deleteOneParent(where: { id: 1 }) { id }}"#),
+          run_query!(&runner, r#"mutation { deleteOneParent(where: { id: 1 }) { id }}"#),
           @r###"{"data":{"deleteOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"query { findManyChild { id parent_id }}"#),
+          run_query!(&runner, r#"query { findManyChild { id parent_id }}"#),
           @r###"{"data":{"findManyChild":[{"id":1,"parent_id":null}]}}"###
         );
 

@@ -6,7 +6,7 @@ use crate::{
     orderby::OrderByBuilder,
     vacuum_cursor, BsonTransform, IntoBson,
 };
-use connector_interface::{AggregationSelection, Filter, QueryArguments};
+use connector_interface::{AggregationSelection, Filter, QueryArguments, RelAggregationSelection};
 use itertools::Itertools;
 use mongodb::{
     bson::{doc, Bson, Document},
@@ -14,6 +14,7 @@ use mongodb::{
     ClientSession, Collection,
 };
 use prisma_models::{ModelProjection, ModelRef, ScalarFieldRef};
+use std::convert::TryFrom;
 
 /// Ergonomics wrapper for query execution and logging.
 /// Todo: Add all other queries gradually.
@@ -26,7 +27,7 @@ pub enum MongoReadQuery {
 impl MongoReadQuery {
     pub async fn execute(
         self,
-        on_collection: Collection,
+        on_collection: Collection<Document>,
         with_session: &mut ClientSession,
     ) -> crate::Result<Vec<Document>> {
         log_query(on_collection.name(), &self);
@@ -44,7 +45,7 @@ pub struct PipelineQuery {
 impl PipelineQuery {
     pub async fn execute(
         self,
-        on_collection: Collection,
+        on_collection: Collection<Document>,
         with_session: &mut ClientSession,
     ) -> crate::Result<Vec<Document>> {
         let opts = AggregateOptions::builder().allow_disk_use(true).build();
@@ -64,7 +65,7 @@ pub struct FindQuery {
 impl FindQuery {
     pub async fn execute(
         self,
-        on_collection: Collection,
+        on_collection: Collection<Document>,
         with_session: &mut ClientSession,
     ) -> crate::Result<Vec<Document>> {
         let cursor = on_collection
@@ -107,6 +108,9 @@ pub(crate) struct MongoReadQueryBuilder {
     /// Kept separate as cursor building needs to consider them seperately.
     pub(crate) order_joins: Vec<JoinStage>,
 
+    /// Finalized ordering aggregation computed from the joins
+    pub(crate) order_aggregate_projections: Vec<Document>,
+
     /// Cursor builder for deferred processing.
     cursor_builder: Option<CursorBuilder>,
 
@@ -129,7 +133,7 @@ pub(crate) struct MongoReadQueryBuilder {
 }
 
 impl MongoReadQueryBuilder {
-    pub fn _new(model: ModelRef) -> Self {
+    pub fn new(model: ModelRef) -> Self {
         Self {
             model,
             query: None,
@@ -140,6 +144,7 @@ impl MongoReadQueryBuilder {
             order_builder: None,
             order: None,
             order_joins: vec![],
+            order_aggregate_projections: vec![],
             cursor_builder: None,
             cursor_data: None,
             skip: None,
@@ -162,7 +167,7 @@ impl MongoReadQueryBuilder {
         let query = match args.filter {
             Some(filter) => {
                 // If a filter comes with joins, it needs to be run _after_ the initial filter query / $matches.
-                let (filter, filter_joins) = convert_filter(filter, false)?.render();
+                let (filter, filter_joins) = convert_filter(filter, false, false)?.render();
                 if !filter_joins.is_empty() {
                     joins.extend(filter_joins);
                     post_filters.push(filter);
@@ -188,6 +193,7 @@ impl MongoReadQueryBuilder {
             aggregation_filters: vec![],
             order: None,
             order_joins: vec![],
+            order_aggregate_projections: vec![],
             cursor_data: None,
             projection: None,
             is_group_by_query: false,
@@ -259,14 +265,20 @@ impl MongoReadQueryBuilder {
         // Joins ($lookup)
         let joins = self.joins.into_iter().chain(self.order_joins);
 
-        stages.extend(joins.flat_map(|nested_stage| {
+        let mut unwinds: Vec<Document> = vec![];
+
+        for nested_stage in joins {
             let (join, unwind) = nested_stage.build();
 
-            match unwind {
-                Some(unwind) => vec![join, unwind],
-                None => vec![join],
+            if let Some(u) = unwind {
+                unwinds.push(u);
             }
-        }));
+
+            stages.push(join);
+        }
+
+        // Order by aggregate computed from joins ($addFields)
+        stages.extend(self.order_aggregate_projections);
 
         // Post-join $matches
         stages.extend(self.join_filters.into_iter().map(|filter| doc! { "$match": filter }));
@@ -287,6 +299,11 @@ impl MongoReadQueryBuilder {
             );
         }
 
+        // Join's $unwind placed before sorting
+        // because Mongo does not support sorting multiple arrays
+        // https://jira.mongodb.org/browse/SERVER-32859
+        stages.extend(unwinds);
+
         // $sort
         if let Some(order) = self.order {
             stages.push(doc! { "$sort": order })
@@ -294,7 +311,7 @@ impl MongoReadQueryBuilder {
 
         // $skip
         if let Some(skip) = self.skip {
-            stages.push(doc! { "$skip": skip });
+            stages.push(doc! { "$skip": i64::try_from(skip).unwrap() });
         };
 
         // $limit
@@ -356,13 +373,10 @@ impl MongoReadQueryBuilder {
             .order_joins
             .clone()
             .into_iter()
-            .flat_map(|nested_stage| {
-                let (join, unwind) = nested_stage.build();
+            .map(|nested_stage| {
+                let (join, _) = nested_stage.build();
 
-                match unwind {
-                    Some(unwind) => vec![join, unwind],
-                    None => vec![join],
-                }
+                join
             })
             .collect_vec();
 
@@ -372,6 +386,8 @@ impl MongoReadQueryBuilder {
         // First match the cursor, then add required ordering joins.
         outer_stages.push(doc! { "$match": cursor_data.cursor_filter });
         outer_stages.extend(order_join_stages);
+
+        outer_stages.extend(self.order_aggregate_projections.clone());
 
         // Self-"join" collection
         let inner_stages = self.into_pipeline_stages();
@@ -395,6 +411,33 @@ impl MongoReadQueryBuilder {
     pub fn with_model_projection(mut self, selected_fields: ModelProjection) -> crate::Result<Self> {
         let projection = selected_fields.into_bson()?.into_document()?;
         self.projection = Some(projection);
+
+        Ok(self)
+    }
+
+    /// Adds the necessary joins and the associated selections to the projection
+    pub fn with_aggregation_selections(
+        mut self,
+        aggregation_selections: &[RelAggregationSelection],
+    ) -> crate::Result<Self> {
+        for aggr in aggregation_selections {
+            let join = match aggr {
+                RelAggregationSelection::Count(rf) => JoinStage {
+                    source: rf.clone(),
+                    alias: Some(aggr.db_alias()),
+                    nested: vec![],
+                },
+            };
+            let projection = doc! {
+              aggr.db_alias(): { "$size": format!("${}", aggr.db_alias()) }
+            };
+
+            self.joins.push(join);
+            self.projection = self.projection.map_or(Some(projection.clone()), |mut p| {
+                p.extend(projection);
+                Some(p)
+            });
+        }
 
         Ok(self)
     }
@@ -502,7 +545,7 @@ impl MongoReadQueryBuilder {
     /// Adds aggregation filters based on a having scalar filter.
     pub fn with_having(mut self, having: Option<Filter>) -> crate::Result<Self> {
         if let Some(filter) = having {
-            let (filter_doc, _) = convert_filter(filter, false)?.render();
+            let (filter_doc, _) = convert_filter(filter, false, true)?.render();
             self.aggregation_filters.push(filter_doc);
         }
 
@@ -513,10 +556,11 @@ impl MongoReadQueryBuilder {
     fn finalize(&mut self) -> crate::Result<()> {
         // Cursor building depends on the ordering, so it must come first.
         if let Some(order_builder) = self.order_builder.take() {
-            let (order, joins) = order_builder.build(self.is_group_by_query);
+            let (order, order_aggregate_projections, joins) = order_builder.build(self.is_group_by_query);
 
             self.order_joins.extend(joins);
             self.order = order;
+            self.order_aggregate_projections = order_aggregate_projections;
         }
 
         if let Some(cursor_builder) = self.cursor_builder.take() {

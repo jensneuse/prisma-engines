@@ -240,6 +240,22 @@ mod tests {
     }
 
     #[test]
+    fn introspect_sqlserver() {
+        let schema = "datasource db {
+		provider = \"sqlserver\"
+		url      = \"sqlserver://sa:mySecret_Password@localhost:1433/wundergraph?schema=wg\"
+	}";
+        let schema = CString::new(schema.to_string()).unwrap().to_owned().into_raw();
+        let result = prisma_introspect(schema);
+        unsafe {
+            assert_eq!((*result).schema.is_null(), false);
+            assert_eq!((*result).sdl.is_null(), false);
+            assert_eq!((*result).error.is_null(), true);
+            free_introspection_result(result);
+        }
+    }
+
+    #[test]
     fn test_prisma_connect() {
         let schema = "datasource db {
 		provider = \"postgresql\"

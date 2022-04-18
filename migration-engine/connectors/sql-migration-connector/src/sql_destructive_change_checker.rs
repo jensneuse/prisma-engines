@@ -145,6 +145,7 @@ impl SqlMigrationConnector {
                                     .check_drop_and_recreate_column(&columns, changes, &mut plan, step_index)
                             }
                             TableChange::AddPrimaryKey { .. } => (),
+                            TableChange::RenamePrimaryKey { .. } => (),
                         }
                     }
                 }
@@ -273,21 +274,15 @@ impl SqlMigrationConnector {
 
         plan
     }
-
-    #[tracing::instrument(skip(self, migration), target = "SqlDestructiveChangeChecker::check")]
-    async fn check_impl(&self, migration: &SqlMigration) -> ConnectorResult<DestructiveChangeDiagnostics> {
-        let plan = self.plan(migration);
-
-        plan.execute(self.conn()).await
-    }
 }
 
 #[async_trait::async_trait]
 impl DestructiveChangeChecker for SqlMigrationConnector {
     async fn check(&self, migration: &Migration) -> ConnectorResult<DestructiveChangeDiagnostics> {
         let plan = self.plan(migration.downcast_ref());
+        let conn = self.conn().await?;
 
-        plan.execute(self.conn()).await
+        plan.execute(self.flavour(), conn).await
     }
 
     fn pure_check(&self, migration: &Migration) -> DestructiveChangeDiagnostics {

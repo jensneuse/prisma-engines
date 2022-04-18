@@ -190,6 +190,16 @@ impl<'a> TableAssertion<'a> {
         self
     }
 
+    pub fn assert_fk_with_name(self, name: &str) -> Self {
+        let matching_fk = self
+            .table
+            .foreign_keys
+            .iter()
+            .any(|found| found.constraint_name == Some(name.to_string()));
+        assert!(matching_fk, "Assertion failed. Could not find fk with name.");
+        self
+    }
+
     pub fn assert_does_not_have_column(self, column_name: &str) -> Self {
         if self.table.column(column_name).is_some() {
             panic!(
@@ -279,6 +289,19 @@ impl<'a> TableAssertion<'a> {
         self
     }
 
+    pub fn assert_has_index_name_and_type(self, name: &str, unique: bool) -> Self {
+        if self
+            .table
+            .indices
+            .iter()
+            .any(|idx| idx.name == name && idx.is_unique() == unique)
+        {
+            self
+        } else {
+            panic!("Could not find index with name {} and correct type", name);
+        }
+    }
+
     pub fn debug_print(self) -> Self {
         println!("{:?}", self.table);
         self
@@ -315,17 +338,34 @@ impl<'a> ColumnAssertion<'a> {
         self
     }
 
-    pub fn assert_default(self, expected: Option<DefaultValue>) -> Self {
+    #[track_caller]
+    pub fn assert_default_kind(self, expected: Option<DefaultKind>) -> Self {
         let found = &self.column.default.as_ref().map(|d| d.kind());
 
         assert!(
-            found == &expected.as_ref().map(|d| d.kind()),
+            self.column.default.as_ref().map(|d| d.kind()) == expected.as_ref(),
             "Assertion failed. Expected default: {:?}, but found {:?}",
             expected,
             found
         );
 
         self
+    }
+
+    #[track_caller]
+    pub fn assert_default(self, expected: Option<DefaultValue>) -> Self {
+        let this = self.assert_default_kind(expected.clone().map(|val| val.into_kind()));
+        let found = &this.column.default.as_ref().map(|d| d.constraint_name());
+        let expected = expected.as_ref().map(|d| d.constraint_name());
+
+        assert!(
+            found == &expected,
+            "Assertion failed. Expected default constraint name: {:?}, but found {:?}",
+            expected,
+            found
+        );
+
+        this
     }
 
     pub fn assert_full_data_type(self, full_data_type: &str) -> Self {
@@ -347,7 +387,7 @@ impl<'a> ColumnAssertion<'a> {
     }
 
     pub fn assert_int_default(self, expected: i64) -> Self {
-        self.assert_default(Some(DefaultValue::value(expected)))
+        self.assert_default_kind(Some(DefaultKind::Value(expected.into())))
     }
 
     pub fn assert_default_value(self, expected: &prisma_value::PrismaValue) -> Self {
@@ -575,6 +615,12 @@ impl<'a> PrimaryKeyAssertion<'a> {
         self
     }
 
+    pub fn assert_constraint_name(self, constraint_name: Option<String>) -> Self {
+        assert_eq!(self.pk.constraint_name, constraint_name);
+
+        self
+    }
+
     pub fn debug_print(self) -> Self {
         println!("{:?}", &self.pk);
         self
@@ -641,6 +687,7 @@ impl<'a> ForeignKeyAssertion<'a> {
 pub struct IndexAssertion<'a>(&'a Index);
 
 impl<'a> IndexAssertion<'a> {
+    #[track_caller]
     pub fn assert_name(self, name: &str) -> Self {
         assert_eq!(self.0.name, name);
 

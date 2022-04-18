@@ -1,43 +1,23 @@
-use std::io::{self, Read};
-
-use datamodel::common::preview_features::PreviewFeature;
-
-pub fn run() {
-    let mut datamodel_string = String::new();
-
-    io::stdin()
-        .read_to_string(&mut datamodel_string)
-        .expect("Unable to read from stdin.");
-
-    let datamodel_result = datamodel::parse_configuration(&datamodel_string);
+pub(crate) fn run(schema: &str) -> String {
+    let datamodel_result = datamodel::parse_configuration(schema);
 
     match datamodel_result {
         Ok(validated_configuration) => {
             if validated_configuration.subject.datasources.len() != 1 {
-                print!("[]")
+                "[]".to_string()
             } else if let Some(datasource) = validated_configuration.subject.datasources.first() {
-                if validated_configuration
-                    .subject
-                    .preview_features()
-                    .any(|f| *f == PreviewFeature::ReferentialActions)
-                {
-                    let available_referential_actions = datasource
-                        .active_connector
-                        .referential_actions()
-                        .iter()
-                        .map(|act| format!("{:?}", act))
-                        .collect::<Vec<_>>();
+                let available_referential_actions = datasource
+                    .active_connector
+                    .referential_actions()
+                    .iter()
+                    .map(|act| format!("{:?}", act))
+                    .collect::<Vec<_>>();
 
-                    let json = serde_json::to_string(&available_referential_actions).expect("Failed to render JSON");
-
-                    print!("{}", json)
-                } else {
-                    print!("[]")
-                }
+                serde_json::to_string(&available_referential_actions).expect("Failed to render JSON")
             } else {
-                print!("[]")
+                "[]".to_string()
             }
         }
-        _ => print!("[]"),
+        _ => "[]".to_owned(),
     }
 }

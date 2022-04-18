@@ -55,7 +55,12 @@ impl MssqlFlavour {
             column
                 .default()
                 .map(|default| {
-                    let constraint_name = format!("DF__{}__{}", column.table().name(), column.name());
+                    // named constraints
+                    let constraint_name = default
+                        .constraint_name()
+                        .map(Cow::from)
+                        // .. or legacy
+                        .unwrap_or_else(|| Cow::from(format!("DF__{}__{}", column.table().name(), column.name())));
 
                     Cow::Owned(format!(
                         " CONSTRAINT {} DEFAULT {}",
@@ -105,7 +110,7 @@ impl SqlRenderer for MssqlFlavour {
         unreachable!("render_alter_enum on Microsoft SQL Server")
     }
 
-    fn render_alter_index(&self, indexes: Pair<&IndexWalker<'_>>) -> Vec<String> {
+    fn render_rename_index(&self, indexes: Pair<&IndexWalker<'_>>) -> Vec<String> {
         let index_with_table = format!(
             "{}.{}.{}",
             self.schema_name(),
@@ -130,8 +135,7 @@ impl SqlRenderer for MssqlFlavour {
             IndexType::Normal => "",
         };
 
-        let index_name = index.name().replace('.', "_");
-        let index_name = self.quote(&index_name);
+        let index_name = self.quote(index.name());
         let table_reference = self.quote_with_schema(index.table().name()).to_string();
 
         let columns = index.columns().map(|c| self.quote(c.name()));
@@ -151,15 +155,12 @@ impl SqlRenderer for MssqlFlavour {
             .map(|column| self.render_column(&column))
             .join(",\n    ");
 
-        let primary_columns = table.primary_key_column_names();
-
-        let primary_key = if let Some(primary_columns) = primary_columns.as_ref().filter(|cols| !cols.is_empty()) {
-            let index_name = format!("PK__{}__{}", table.name(), primary_columns.iter().join("_"));
-            let column_names = primary_columns.iter().map(|col| self.quote(col)).join(",");
+        let primary_key = if let Some(pk) = table.primary_key() {
+            let column_names = pk.columns.iter().map(|col| self.quote(col)).join(",");
 
             format!(
                 ",\n    CONSTRAINT {} PRIMARY KEY ({})",
-                self.quote(&index_name),
+                self.quote(pk.constraint_name.as_ref().unwrap()),
                 column_names
             )
         } else {
@@ -175,10 +176,9 @@ impl SqlRenderer for MssqlFlavour {
             let constraints = constraints
                 .iter()
                 .map(|index| {
-                    let name = index.name().replace('.', "_");
                     let columns = index.columns().map(|col| self.quote(col.name()));
 
-                    format!("CONSTRAINT {} UNIQUE ({})", self.quote(&name), columns.join(","))
+                    format!("CONSTRAINT {} UNIQUE ({})", self.quote(index.name()), columns.join(","))
                 })
                 .join(",\n    ");
 
@@ -395,7 +395,7 @@ impl SqlRenderer for MssqlFlavour {
     }
 
     fn render_drop_user_defined_type(&self, udt: &UserDefinedTypeWalker<'_>) -> String {
-        todo!("DROP TYPE {}", self.quote_with_schema(udt.name()))
+        format!("DROP TYPE {}", self.quote_with_schema(udt.name()))
     }
 
     fn render_begin_transaction(&self) -> Option<&'static str> {
@@ -416,7 +416,7 @@ impl SqlRenderer for MssqlFlavour {
             BEGIN CATCH
 
             IF @@TRANCOUNT > 0
-            BEGIN 
+            BEGIN
                 ROLLBACK TRAN;
             END;
             THROW
@@ -425,6 +425,15 @@ impl SqlRenderer for MssqlFlavour {
         "# };
 
         Some(sql)
+    }
+
+    fn render_rename_foreign_key(&self, fks: &Pair<ForeignKeyWalker<'_>>) -> String {
+        format!(
+            r#"EXEC sp_rename '{schema}.{previous}', '{next}', 'OBJECT'"#,
+            schema = self.schema_name(),
+            previous = fks.previous().constraint_name().unwrap(),
+            next = fks.next().constraint_name().unwrap(),
+        )
     }
 }
 

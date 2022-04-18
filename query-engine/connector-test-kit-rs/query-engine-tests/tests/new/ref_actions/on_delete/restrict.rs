@@ -24,9 +24,9 @@ mod one2one_req {
 
     /// Deleting the parent must fail if a child is connected.
     #[connector_test]
-    async fn delete_parent_failure(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent_failure(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1, child: { create: { id: 1 }}}) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1, child: { create: { id: 1 }}}) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
@@ -36,10 +36,6 @@ mod one2one_req {
                 "mutation { deleteOneParent(where: { id: 1 }) { id }}",
                 2014,
                 "The change you are trying to make would violate the required relation 'ChildToParent' between the `Child` and `Parent` models."
-            ),
-            ConnectorTag::Sqlite(_) => insta::assert_snapshot!(
-                run_query!(runner, r#"mutation { deleteOneParent(where: { id: 1 }) { id }}"#),
-                @r###"{"errors":[{"error":"Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(SqliteFailure(Error { code: ConstraintViolation, extended_code: 1811 }, Some(\"FOREIGN KEY constraint failed\"))) })","user_facing_error":{"is_panic":false,"message":"Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(SqliteFailure(Error { code: ConstraintViolation, extended_code: 1811 }, Some(\"FOREIGN KEY constraint failed\"))) })","backtrace":null}}]}"###
             ),
             _ => assert_error!(
                 runner,
@@ -74,9 +70,9 @@ mod one2one_opt {
 
     /// Deleting the parent must fail if a child is connected.
     #[connector_test]
-    async fn delete_parent_failure(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent_failure(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1, child: { create: { id: 1 }}}) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1, child: { create: { id: 1 }}}) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
@@ -86,10 +82,6 @@ mod one2one_opt {
                 "mutation { deleteOneParent(where: { id: 1 }) { id }}",
                 2014,
                 "The change you are trying to make would violate the required relation 'ChildToParent' between the `Child` and `Parent` models."
-            ),
-            ConnectorTag::Sqlite(_) => insta::assert_snapshot!(
-                run_query!(runner, r#"mutation { deleteOneParent(where: { id: 1 }) { id }}"#),
-                @r###"{"errors":[{"error":"Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(SqliteFailure(Error { code: ConstraintViolation, extended_code: 1811 }, Some(\"FOREIGN KEY constraint failed\"))) })","user_facing_error":{"is_panic":false,"message":"Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(SqliteFailure(Error { code: ConstraintViolation, extended_code: 1811 }, Some(\"FOREIGN KEY constraint failed\"))) })","backtrace":null}}]}"###
             ),
             _ => assert_error!(
                 runner,
@@ -104,24 +96,24 @@ mod one2one_opt {
 
     /// Deleting the parent succeeds if no child is connected.
     #[connector_test]
-    async fn delete_parent(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1 }) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1 }) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 2 }) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 2 }) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":2}}}"###
         );
 
         insta::assert_snapshot!(
-            run_query!(runner, "mutation { deleteOneParent(where: { id: 1 }) { id }}"),
+            run_query!(&runner, "mutation { deleteOneParent(where: { id: 1 }) { id }}"),
             @r###"{"data":{"deleteOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-            run_query!(runner, "mutation { deleteManyParent(where: { id: 2 }) { count }}"),
+            run_query!(&runner, "mutation { deleteManyParent(where: { id: 2 }) { count }}"),
             @r###"{"data":{"deleteManyParent":{"count":1}}}"###
         );
 
@@ -150,9 +142,9 @@ mod one2many_req {
 
     /// Deleting the parent must fail if a child is connected.
     #[connector_test]
-    async fn delete_parent_failure(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent_failure(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1, children: { create: { id: 1 }}}) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1, children: { create: { id: 1 }}}) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
@@ -162,10 +154,6 @@ mod one2many_req {
                 "mutation { deleteOneParent(where: { id: 1 }) { id }}",
                 2014,
                 "The change you are trying to make would violate the required relation 'ChildToParent' between the `Child` and `Parent` models."
-            ),
-            ConnectorTag::Sqlite(_) => insta::assert_snapshot!(
-                run_query!(runner, r#"mutation { deleteOneParent(where: { id: 1 }) { id }}"#),
-                @r###"{"errors":[{"error":"Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(SqliteFailure(Error { code: ConstraintViolation, extended_code: 1811 }, Some(\"FOREIGN KEY constraint failed\"))) })","user_facing_error":{"is_panic":false,"message":"Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(SqliteFailure(Error { code: ConstraintViolation, extended_code: 1811 }, Some(\"FOREIGN KEY constraint failed\"))) })","backtrace":null}}]}"###
             ),
             _ => assert_error!(
                 runner,
@@ -180,24 +168,24 @@ mod one2many_req {
 
     /// Deleting the parent succeeds if no child is connected.
     #[connector_test]
-    async fn delete_parent(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1 }) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1 }) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 2 }) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 2 }) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":2}}}"###
         );
 
         insta::assert_snapshot!(
-            run_query!(runner, "mutation { deleteOneParent(where: { id: 1 }) { id }}"),
+            run_query!(&runner, "mutation { deleteOneParent(where: { id: 1 }) { id }}"),
             @r###"{"data":{"deleteOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-            run_query!(runner, "mutation { deleteManyParent(where: { id: 2 }) { count }}"),
+            run_query!(&runner, "mutation { deleteManyParent(where: { id: 2 }) { count }}"),
             @r###"{"data":{"deleteManyParent":{"count":1}}}"###
         );
 
@@ -226,9 +214,9 @@ mod one2many_opt {
 
     /// Deleting the parent must fail if a child is connected.
     #[connector_test]
-    async fn delete_parent_failure(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent_failure(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1, children: { create: { id: 1 }}}) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1, children: { create: { id: 1 }}}) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
@@ -239,10 +227,6 @@ mod one2many_opt {
                 2014,
                 "The change you are trying to make would violate the required relation 'ChildToParent' between the `Child` and `Parent` models."
             ),
-            ConnectorTag::Sqlite(_) => insta::assert_snapshot!(
-                run_query!(runner, r#"mutation { deleteOneParent(where: { id: 1 }) { id }}"#),
-                @r###"{"errors":[{"error":"Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(SqliteFailure(Error { code: ConstraintViolation, extended_code: 1811 }, Some(\"FOREIGN KEY constraint failed\"))) })","user_facing_error":{"is_panic":false,"message":"Error occurred during query execution:\nConnectorError(ConnectorError { user_facing_error: None, kind: QueryError(SqliteFailure(Error { code: ConstraintViolation, extended_code: 1811 }, Some(\"FOREIGN KEY constraint failed\"))) })","backtrace":null}}]}"###
-              ),
             _ => assert_error!(
                 runner,
                 "mutation { deleteOneParent(where: { id: 1 }) { id }}",
@@ -256,24 +240,24 @@ mod one2many_opt {
 
     /// Deleting the parent succeeds if no child is connected.
     #[connector_test]
-    async fn delete_parent(runner: &Runner) -> TestResult<()> {
+    async fn delete_parent(runner: Runner) -> TestResult<()> {
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 1 }) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 1 }) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-          run_query!(runner, r#"mutation { createOneParent(data: { id: 2 }) { id }}"#),
+          run_query!(&runner, r#"mutation { createOneParent(data: { id: 2 }) { id }}"#),
           @r###"{"data":{"createOneParent":{"id":2}}}"###
         );
 
         insta::assert_snapshot!(
-            run_query!(runner, "mutation { deleteOneParent(where: { id: 1 }) { id }}"),
+            run_query!(&runner, "mutation { deleteOneParent(where: { id: 1 }) { id }}"),
             @r###"{"data":{"deleteOneParent":{"id":1}}}"###
         );
 
         insta::assert_snapshot!(
-            run_query!(runner, "mutation { deleteManyParent(where: { id: 2 }) { count }}"),
+            run_query!(&runner, "mutation { deleteManyParent(where: { id: 2 }) { count }}"),
             @r###"{"data":{"deleteManyParent":{"count":1}}}"###
         );
 

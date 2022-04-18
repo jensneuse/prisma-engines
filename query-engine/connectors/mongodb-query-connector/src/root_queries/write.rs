@@ -1,11 +1,16 @@
 use super::*;
-use crate::{filter::convert_filter, output_meta, vacuum_cursor, IntoBson};
+use crate::{
+    filter::{convert_filter, MongoFilter},
+    output_meta,
+    query_builder::MongoReadQueryBuilder,
+    IntoBson,
+};
 use connector_interface::*;
 use mongodb::{
     bson::{doc, Document},
     error::ErrorKind,
-    options::{FindOptions, InsertManyOptions},
-    ClientSession, Database,
+    options::InsertManyOptions,
+    ClientSession, Collection, Database,
 };
 use prisma_models::{ModelRef, PrismaValue, RecordProjection};
 use std::convert::TryInto;
@@ -130,19 +135,8 @@ pub async fn update_records<'conn>(
             .map(|p| (&id_field, p.values().next().unwrap()).into_bson())
             .collect::<crate::Result<Vec<_>>>()?
     } else {
-        let (filter, _joins) = convert_filter(record_filter.filter, false)?.render();
-        let find_options = FindOptions::builder()
-            .projection(doc! { id_field.db_name(): 1 })
-            .build();
-
-        let cursor = coll
-            .find_with_session(Some(filter), Some(find_options), session)
-            .await?;
-
-        let docs = vacuum_cursor(cursor, session).await?;
-        docs.into_iter()
-            .map(|mut doc| doc.remove(id_field.db_name()).unwrap())
-            .collect()
+        let filter = convert_filter(record_filter.filter, false, false)?;
+        find_ids(coll.clone(), session, model, filter).await?
     };
 
     if ids.is_empty() {
@@ -150,29 +144,73 @@ pub async fn update_records<'conn>(
     }
 
     let filter = doc! { id_field.db_name(): { "$in": ids.clone() } };
-    let mut update_doc = Document::new();
     let fields = model.fields().scalar();
+    let mut update_docs: Vec<Document> = vec![];
 
     for (field_name, write_expr) in args.args {
         let DatasourceFieldName(name) = field_name;
+
         // Todo: This is inefficient.
         let field = fields.iter().find(|f| f.db_name() == name).unwrap();
+        let field_name = field.db_name();
+        let dollar_field_name = format!("${}", field.db_name());
 
-        let (op_key, val) = match write_expr {
+        let doc = match write_expr {
+            WriteExpression::Add(rhs) if field.is_list => match rhs {
+                PrismaValue::List(vals) => {
+                    let vals = vals
+                        .into_iter()
+                        .map(|val| (field, val).into_bson())
+                        .collect::<crate::Result<Vec<_>>>()?;
+                    let bson_array = Bson::Array(vals);
+
+                    doc! {
+                        "$set": { field_name: {
+                            "$ifNull": [
+                                { "$concatArrays": [dollar_field_name, bson_array.clone()] },
+                                bson_array
+                            ]
+                        } }
+                    }
+                }
+                val => {
+                    let bson_val = (field, val).into_bson()?;
+
+                    doc! {
+                        "$set": { field_name: {
+                            "$ifNull": [
+                                { "$concatArrays": [dollar_field_name, [bson_val.clone()]] },
+                                [bson_val]
+                            ]
+                        } }
+                    }
+                }
+            },
+            // We use $literal to enable the set of empty object, which is otherwise considered a syntax error
+            WriteExpression::Value(rhs) => doc! {
+                "$set": { field_name: { "$literal": (field, rhs).into_bson()? } }
+            },
+            WriteExpression::Add(rhs) => doc! {
+                "$set": { field_name: { "$add": [dollar_field_name, (field, rhs).into_bson()?] } }
+            },
+            WriteExpression::Substract(rhs) => doc! {
+                "$set": { field_name: { "$subtract": [dollar_field_name, (field, rhs).into_bson()?] } }
+            },
+            WriteExpression::Multiply(rhs) => doc! {
+                "$set": { field_name: { "$multiply": [dollar_field_name, (field, rhs).into_bson()?] } }
+            },
+            WriteExpression::Divide(rhs) => doc! {
+                "$set": { field_name: { "$divide": [dollar_field_name, (field, rhs).into_bson()?] } }
+            },
             WriteExpression::Field(_) => unimplemented!(),
-            WriteExpression::Value(rhs) => ("$set", (field, rhs).into_bson()?),
-            WriteExpression::Add(rhs) => ("$inc", (field, rhs).into_bson()?),
-            WriteExpression::Substract(rhs) => ("$inc", (field, (rhs * PrismaValue::Int(-1))).into_bson()?),
-            WriteExpression::Multiply(rhs) => ("$mul", (field, rhs).into_bson()?),
-            WriteExpression::Divide(rhs) => ("$mul", (field, (PrismaValue::new_float(1.0) / rhs)).into_bson()?),
         };
 
-        let entry = update_doc.entry(op_key.to_owned()).or_insert(Document::new().into());
-        entry.as_document_mut().unwrap().insert(name, val);
+        update_docs.push(doc);
     }
 
-    if !update_doc.is_empty() {
-        coll.update_many_with_session(filter, update_doc, None, session).await?;
+    if !update_docs.is_empty() {
+        coll.update_many_with_session(filter, update_docs, None, session)
+            .await?;
     }
 
     let ids = ids
@@ -188,7 +226,6 @@ pub async fn update_records<'conn>(
     Ok(ids)
 }
 
-// todo joins
 pub async fn delete_records<'conn>(
     database: &Database,
     session: &mut ClientSession,
@@ -196,9 +233,9 @@ pub async fn delete_records<'conn>(
     record_filter: RecordFilter,
 ) -> crate::Result<usize> {
     let coll = database.collection::<Document>(model.db_name());
+    let id_field = model.primary_identifier().scalar_fields().next().unwrap();
 
     let filter = if let Some(selectors) = record_filter.selectors {
-        let id_field = model.primary_identifier().scalar_fields().next().unwrap();
         let ids = selectors
             .into_iter()
             .map(|p| (&id_field, p.values().next().unwrap()).into_bson())
@@ -206,13 +243,42 @@ pub async fn delete_records<'conn>(
 
         doc! { id_field.db_name(): { "$in": ids } }
     } else {
-        let (filter, _joins) = convert_filter(record_filter.filter, false)?.render();
-        filter
+        let filter = convert_filter(record_filter.filter, false, false)?;
+        let ids = find_ids(coll.clone(), session, model, filter).await?;
+
+        doc! { id_field.db_name(): { "$in": ids } }
     };
 
     let delete_result = coll.delete_many_with_session(filter, None, session).await?;
 
     Ok(delete_result.deleted_count as usize)
+}
+
+/// Retrives document ids based on the given filter.
+async fn find_ids(
+    collection: Collection<Document>,
+    session: &mut ClientSession,
+    model: &ModelRef,
+    filter: MongoFilter,
+) -> crate::Result<Vec<Bson>> {
+    let id_field = model.primary_identifier();
+    let mut builder = MongoReadQueryBuilder::new(model.clone());
+
+    // If a filter comes with joins, it needs to be run _after_ the initial filter query / $matches.
+    let (filter, filter_joins) = filter.render();
+    if !filter_joins.is_empty() {
+        builder.joins = filter_joins;
+        builder.join_filters.push(filter);
+    } else {
+        builder.query = Some(filter);
+    };
+
+    let builder = builder.with_model_projection(id_field)?;
+    let query = builder.build()?;
+    let docs = query.execute(collection, session).await?;
+    let ids = docs.into_iter().map(|mut doc| doc.remove("_id").unwrap()).collect();
+
+    Ok(ids)
 }
 
 /// Connect relations defined in `child_ids` to a parent defined in `parent_id`.

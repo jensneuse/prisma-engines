@@ -1,37 +1,43 @@
-use datamodel_connector::{connector_error::ConnectorError, Connector, ConnectorCapability};
+use datamodel_connector::{
+    connector_error::ConnectorError, Connector, ConnectorCapability, ConstraintNameSpace, ConstraintType,
+    ConstraintViolationScope, ReferentialIntegrity,
+};
+use dml::datamodel::Datamodel;
 use dml::{
-    field::Field, model::Model, native_type_constructor::NativeTypeConstructor,
-    native_type_instance::NativeTypeInstance, relation_info::ReferentialAction, scalars::ScalarType,
+    native_type_constructor::NativeTypeConstructor, native_type_instance::NativeTypeInstance,
+    relation_info::ReferentialAction, scalars::ScalarType,
 };
 use enumflags2::BitFlags;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 pub struct SqliteDatamodelConnector {
     capabilities: Vec<ConnectorCapability>,
     constructors: Vec<NativeTypeConstructor>,
-    referential_actions: BitFlags<ReferentialAction>,
+    referential_integrity: ReferentialIntegrity,
 }
 
 impl SqliteDatamodelConnector {
-    pub fn new() -> SqliteDatamodelConnector {
-        use ReferentialAction::*;
-
-        let capabilities = vec![
+    pub fn new(referential_integrity: ReferentialIntegrity) -> SqliteDatamodelConnector {
+        let mut capabilities = vec![
             ConnectorCapability::RelationFieldsInArbitraryOrder,
             ConnectorCapability::UpdateableId,
             ConnectorCapability::AutoIncrement,
             ConnectorCapability::CompoundIds,
-            ConnectorCapability::ForeignKeys,
             ConnectorCapability::AnyId,
+            ConnectorCapability::QueryRaw,
         ];
 
+        if referential_integrity.uses_foreign_keys() {
+            capabilities.push(ConnectorCapability::ForeignKeys);
+        }
+
         let constructors: Vec<NativeTypeConstructor> = vec![];
-        let referential_actions = SetNull | SetDefault | Cascade | Restrict | NoAction;
 
         SqliteDatamodelConnector {
             capabilities,
             constructors,
-            referential_actions,
+            referential_integrity,
         }
     }
 }
@@ -50,7 +56,10 @@ impl Connector for SqliteDatamodelConnector {
     }
 
     fn referential_actions(&self) -> BitFlags<ReferentialAction> {
-        self.referential_actions
+        use ReferentialAction::*;
+
+        self.referential_integrity
+            .allowed_referential_actions(SetNull | SetDefault | Cascade | Restrict | NoAction)
     }
 
     fn scalar_type_for_native_type(&self, _native_type: serde_json::Value) -> ScalarType {
@@ -69,12 +78,23 @@ impl Connector for SqliteDatamodelConnector {
         false
     }
 
-    fn validate_field(&self, _field: &Field) -> Result<(), ConnectorError> {
-        Ok(())
-    }
+    fn get_constraint_namespace_violations<'dml>(&self, schema: &'dml Datamodel) -> Vec<ConstraintNameSpace<'dml>> {
+        let mut potential_name_space_violations: BTreeMap<
+            (&str, ConstraintViolationScope),
+            Vec<(&str, ConstraintType)>,
+        > = BTreeMap::new();
 
-    fn validate_model(&self, _model: &Model) -> Result<(), ConnectorError> {
-        Ok(())
+        //Indexes have to be globally unique
+        for model in schema.models() {
+            for name in model.indices.iter().filter_map(|i| i.db_name.as_ref()) {
+                let entry = potential_name_space_violations
+                    .entry((name, ConstraintViolationScope::GlobalKeyIndex))
+                    .or_insert_with(Vec::new);
+
+                entry.push((&model.name, ConstraintType::KeyOrIdx));
+            }
+        }
+        ConstraintNameSpace::flatten(potential_name_space_violations)
     }
 
     fn available_native_type_constructors(&self) -> &[NativeTypeConstructor] {
@@ -113,11 +133,5 @@ impl Connector for SqliteDatamodelConnector {
         }
 
         Ok(())
-    }
-}
-
-impl Default for SqliteDatamodelConnector {
-    fn default() -> Self {
-        Self::new()
     }
 }

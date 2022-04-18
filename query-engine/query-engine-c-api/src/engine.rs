@@ -2,7 +2,7 @@ use crate::{error::ApiError};
 use datamodel::{diagnostics::ValidatedConfiguration, Datamodel, Configuration};
 use opentelemetry::global;
 use prisma_models::DatamodelConverter;
-use query_core::{exec_loader, schema_builder, BuildMode, QueryExecutor, QuerySchema, QuerySchemaRenderer};
+use query_core::{executor,schema_builder, BuildMode, QueryExecutor, QuerySchema, QuerySchemaRenderer};
 use request_handlers::{
     dmmf::{self, DataModelMetaFormat},
     GraphQLSchemaRenderer, GraphQlBody, GraphQlHandler, PrismaResponse,
@@ -19,7 +19,7 @@ use tracing::{metadata::LevelFilter, Level};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use introspection_core::Error;
 use sql_introspection_connector::SqlIntrospectionConnector;
-use introspection_connector::{IntrospectionConnector, IntrospectionContext};
+use introspection_connector::{IntrospectionConnector, IntrospectionContext, CompositeTypeDepth};
 use datamodel::diagnostics::{Validated, Diagnostics};
 
 /// The main engine, that can be cloned between threads when using JavaScript
@@ -152,7 +152,7 @@ impl QueryEngine {
 
         let url = ds.load_url(load_env_var).unwrap();
 
-        let preview_features = config.subject.preview_features().map(Clone::clone).collect();
+        let preview_features = config.subject.preview_features();
 
         let connector = match SqlIntrospectionConnector::new(url.as_str(),preview_features).await {
             introspection_connector::ConnectorResult::Ok(connector) => connector,
@@ -160,8 +160,9 @@ impl QueryEngine {
         };
         let datamodel = Datamodel::new();
         let ctx = IntrospectionContext {
-            preview_features: config.subject.preview_features().map(Clone::clone).collect(),
+            preview_features: config.subject.preview_features(),
             source: config.subject.datasources.into_iter().next().unwrap(),
+            composite_type_depth: CompositeTypeDepth::Level(3),
         };
         let result = match connector.introspect(&datamodel,ctx).await {
             Ok(introspection_result) => {
@@ -195,17 +196,20 @@ impl QueryEngine {
                     .first()
                     .ok_or_else(|| ApiError::configuration("No valid data source found"))?;
 
-                let preview_features: Vec<_> = builder.config.subject.preview_features().cloned().collect();
                 let url = data_source
                     .load_url(load_env_var)
                     .map_err(|err| crate::error::ApiError::Conversion(err, builder.datamodel.raw.clone()))?;
 
-                let (db_name, executor) = exec_loader::load(&data_source, &preview_features, &url).await?;
+                let preview_features: Vec<_> = builder.config.subject.preview_features().iter().collect();
+
+                let (db_name, executor) = executor::load(&data_source, &preview_features, &url).await?;
                 let connector = executor.primary_connector();
                 connector.get_connection().await?;
 
                 // Build internal data model
                 let internal_data_model = template.build(db_name);
+
+                let preview_features: Vec<_> = builder.config.subject.preview_features().iter().collect();
 
                 let query_schema = schema_builder::build(
                     internal_data_model,
@@ -261,7 +265,7 @@ impl QueryEngine {
         match *self.inner.read().await {
             Inner::Connected(ref engine) => {
                 let handler = GraphQlHandler::new(engine.executor(), engine.query_schema());
-                Ok(handler.handle(query).await)
+                Ok(handler.handle(query,None).await)
             }
             Inner::Builder(_) => Err(ApiError::NotConnected),
         }

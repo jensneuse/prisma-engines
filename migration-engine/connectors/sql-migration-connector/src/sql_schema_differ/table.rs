@@ -1,4 +1,4 @@
-use super::differ_database::DifferDatabase;
+use super::{differ_database::DifferDatabase, foreign_keys_match};
 use crate::pair::Pair;
 use sql_schema_describer::{
     walkers::{ColumnWalker, ForeignKeyWalker, IndexWalker, TableWalker},
@@ -66,6 +66,14 @@ impl<'schema, 'b> TableDiffer<'schema, 'b> {
         })
     }
 
+    pub(crate) fn foreign_key_pairs(&self) -> impl Iterator<Item = Pair<ForeignKeyWalker<'schema>>> + '_ {
+        self.previous_foreign_keys().filter_map(move |previous_fk| {
+            self.next_foreign_keys()
+                .find(move |next_fk| foreign_keys_match(Pair::new(&previous_fk, next_fk), self.db))
+                .map(move |next_fk| Pair::new(previous_fk, next_fk))
+        })
+    }
+
     pub(crate) fn index_pairs<'a>(&'a self) -> impl Iterator<Item = Pair<IndexWalker<'schema>>> + 'a {
         let singular_indexes = self.previous_indexes().filter(move |left| {
             // Renaming an index in a situation where we have multiple indexes
@@ -91,13 +99,7 @@ impl<'schema, 'b> TableDiffer<'schema, 'b> {
         match self.tables.as_ref().map(|t| t.primary_key()).as_tuple() {
             (None, Some(pk)) => Some(pk),
             (Some(previous_pk), Some(next_pk)) if previous_pk.columns != next_pk.columns => Some(next_pk),
-            (Some(previous_pk), Some(next_pk)) => {
-                if self.primary_key_column_changed(previous_pk) {
-                    Some(next_pk)
-                } else {
-                    None
-                }
-            }
+            (Some(previous_pk), Some(next_pk)) => self.primary_key_column_changed(previous_pk).then(|| *next_pk),
             _ => None,
         }
     }
@@ -107,13 +109,7 @@ impl<'schema, 'b> TableDiffer<'schema, 'b> {
         match self.tables.as_ref().map(|t| t.primary_key()).as_tuple() {
             (Some(pk), None) => Some(pk),
             (Some(previous_pk), Some(next_pk)) if previous_pk.columns != next_pk.columns => Some(previous_pk),
-            (Some(previous_pk), Some(_next_pk)) => {
-                if self.primary_key_column_changed(previous_pk) {
-                    Some(previous_pk)
-                } else {
-                    None
-                }
-            }
+            (Some(previous_pk), Some(_next_pk)) => self.primary_key_column_changed(previous_pk).then(|| *previous_pk),
             _ => None,
         }
     }

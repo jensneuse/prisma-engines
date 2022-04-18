@@ -1,4 +1,4 @@
-use connector_interface::AggregationSelection;
+use connector_interface::{AggregationSelection, RelAggregationSelection};
 use datamodel::FieldArity;
 use prisma_models::{ModelProjection, PrismaValue, ScalarFieldRef, TypeIdentifier};
 use std::collections::HashMap;
@@ -8,6 +8,7 @@ use std::collections::HashMap;
 /// Maps field db field names to their meta information.
 pub type OutputMetaMapping = HashMap<String, OutputMeta>;
 
+#[derive(Debug)]
 pub struct OutputMeta {
     pub ident: TypeIdentifier,
     pub default: Option<PrismaValue>,
@@ -24,11 +25,18 @@ impl OutputMeta {
     }
 }
 
-pub fn from_selected_fields(selected_fields: &ModelProjection) -> OutputMetaMapping {
+pub fn from_selected_fields(
+    selected_fields: &ModelProjection,
+    aggregation_selections: &[RelAggregationSelection],
+) -> OutputMetaMapping {
     let mut map = OutputMetaMapping::new();
 
     for field in selected_fields.scalar_fields() {
         map.insert(field.db_name().to_owned(), from_field(&field));
+    }
+
+    for selection in aggregation_selections {
+        map.insert(selection.db_alias(), from_rel_aggregation_selection(selection));
     }
 
     map
@@ -38,8 +46,8 @@ pub fn from_field(field: &ScalarFieldRef) -> OutputMeta {
     let (ident, field_arity) = field.type_identifier_with_arity();
 
     // Only add a possible default return if the field is required.
-    let default = field.default_value.clone().and_then(|dv| match dv {
-        datamodel::DefaultValue::Single(pv) if field.is_required => Some(pv),
+    let default = field.default_value.clone().and_then(|dv| match dv.into_kind() {
+        datamodel::DefaultKind::Single(pv) if field.is_required => Some(pv),
         _ => None,
     });
 
@@ -67,4 +75,16 @@ pub fn from_aggregation_selection(selection: &AggregationSelection) -> OutputMet
     }
 
     map
+}
+
+/// Mapping for one specific relation aggregation selection.
+/// DB alias -> OutputMeta
+pub fn from_rel_aggregation_selection(aggr_selection: &RelAggregationSelection) -> OutputMeta {
+    let (ident, arity) = aggr_selection.type_identifier_with_arity();
+
+    OutputMeta {
+        ident,
+        default: None,
+        list: matches!(arity, FieldArity::List),
+    }
 }

@@ -78,6 +78,12 @@ pub enum DatabaseDoesNotExist {
         database_host: String,
         database_port: u16,
     },
+
+    Mssql {
+        database_name: String,
+        database_host: String,
+        database_port: u16,
+    },
 }
 
 impl UserFacingError for DatabaseDoesNotExist {
@@ -106,6 +112,16 @@ impl UserFacingError for DatabaseDoesNotExist {
                 database_port = database_port,
             ),
             DatabaseDoesNotExist::Mysql {
+                database_name,
+                database_host,
+                database_port,
+            } => format!(
+                "Database `{database_name}` does not exist on the database server at `{database_host}:{database_port}`.",
+                database_name = database_name,
+                database_host = database_host,
+                database_port = database_port,
+            ),
+            DatabaseDoesNotExist::Mssql {
                 database_name,
                 database_host,
                 database_port,
@@ -224,6 +240,18 @@ pub struct IncorrectNumberOfParameters {
 #[derive(Debug, UserFacingError, Serialize)]
 #[user_facing(code = "P1017", message = "Server has closed the connection.")]
 pub struct ConnectionClosed;
+
+#[derive(Debug, UserFacingError, Serialize)]
+#[user_facing(code = "P1018", message = "{message}")]
+pub struct TransactionAlreadyClosed {
+    pub message: String,
+}
+
+#[derive(Debug, UserFacingError, Serialize)]
+#[user_facing(code = "P1019", message = "{message}")]
+pub struct UnsupportedFeatureError {
+    pub message: String,
+}
 
 #[cfg(test)]
 mod tests {

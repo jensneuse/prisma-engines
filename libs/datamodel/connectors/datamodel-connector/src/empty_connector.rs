@@ -1,7 +1,6 @@
+use crate::{connector_error::ConnectorError, Connector, ConnectorCapability};
 use dml::relation_info::ReferentialAction;
 use enumflags2::BitFlags;
-
-use crate::{connector_error::ConnectorError, Connector, ConnectorCapability};
 
 /// A [Connector](/trait.Connector.html) implementor meant to
 /// be used as a default when no datasource is defined.
@@ -26,14 +25,6 @@ impl Connector for EmptyDatamodelConnector {
 
     fn constraint_name_length(&self) -> usize {
         usize::MAX
-    }
-
-    fn validate_field(&self, _field: &dml::field::Field) -> Result<(), ConnectorError> {
-        Ok(())
-    }
-
-    fn validate_model(&self, _model: &dml::model::Model) -> Result<(), ConnectorError> {
-        Ok(())
     }
 
     fn available_native_type_constructors(&self) -> &[dml::native_type_constructor::NativeTypeConstructor] {

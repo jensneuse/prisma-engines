@@ -12,12 +12,13 @@ impl DatabaseMigrationStepApplier for SqlMigrationConnector {
     async fn apply_migration(&self, migration: &Migration) -> ConnectorResult<u32> {
         let migration: &SqlMigration = migration.downcast_ref();
         tracing::debug!("{} steps to execute", migration.steps.len());
+        let conn = self.conn().await?;
 
         for (index, step) in migration.steps.iter().enumerate() {
             for sql_string in render_raw_sql(step, self.flavour(), Pair::new(&migration.before, &migration.after)) {
                 assert!(!sql_string.is_empty());
                 tracing::debug!(index, %sql_string);
-                self.flavour().run_query_script(&sql_string, self.conn()).await?;
+                self.flavour().run_query_script(&sql_string, conn).await?;
             }
         }
 
@@ -100,9 +101,8 @@ impl DatabaseMigrationStepApplier for SqlMigrationConnector {
     async fn apply_script(&self, migration_name: &str, script: &str) -> ConnectorResult<()> {
         tracing::info!(migrate_action = "log", "Applying migration `{}`", migration_name);
         self.flavour.scan_migration_script(script);
-        self.flavour
-            .apply_migration_script(migration_name, script, self.conn())
-            .await
+        let conn = self.conn().await?;
+        self.flavour.apply_migration_script(migration_name, script, conn).await
     }
 }
 
@@ -161,8 +161,8 @@ fn render_raw_sql(
         SqlMigrationStep::DropIndex { table_id, index_index } => {
             vec![renderer.render_drop_index(&schemas.previous().table_walker_at(*table_id).index_at(*index_index))]
         }
-        SqlMigrationStep::AlterIndex { table, index } => {
-            renderer.render_alter_index(schemas.tables(table).indexes(index).as_ref())
+        SqlMigrationStep::RenameIndex { table, index } => {
+            renderer.render_rename_index(schemas.tables(table).indexes(index).as_ref())
         }
         SqlMigrationStep::DropView(drop_view) => {
             let view = schemas.previous().view_walker_at(drop_view.view_index);
@@ -173,6 +173,13 @@ fn render_raw_sql(
             let udt = schemas.previous().udt_walker_at(drop_udt.udt_index);
 
             vec![renderer.render_drop_user_defined_type(&udt)]
+        }
+        SqlMigrationStep::RenameForeignKey {
+            table_id,
+            foreign_key_id,
+        } => {
+            let fks = schemas.tables(table_id).foreign_keys(foreign_key_id);
+            vec![renderer.render_rename_foreign_key(&fks)]
         }
     }
 }

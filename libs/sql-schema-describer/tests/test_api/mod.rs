@@ -30,12 +30,7 @@ impl TestApi {
             let (db_name, q, _) = rt.block_on(args.create_postgres_database());
             (db_name, q)
         } else if tags.contains(Tags::Mssql) {
-            let (q, _cs) = rt
-                .block_on(test_setup::init_mssql_database(
-                    args.database_url(),
-                    args.test_function_name(),
-                ))
-                .unwrap();
+            let (q, _cs) = rt.block_on(args.create_mssql_database());
             (args.test_function_name(), q)
         } else if tags.contains(Tags::Sqlite) {
             let url = sqlite_test_url(args.test_function_name());
@@ -111,10 +106,6 @@ impl TestApi {
             SqlFamily::Mssql => barrel::SqlVariant::Mssql,
         });
         self.rt.block_on(self.database.raw_cmd(&full_sql)).unwrap();
-    }
-
-    pub(crate) fn is_cockroach(&self) -> bool {
-        self.tags.contains(Tags::Cockroach)
     }
 
     pub(crate) fn is_mariadb(&self) -> bool {

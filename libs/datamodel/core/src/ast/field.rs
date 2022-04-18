@@ -22,8 +22,7 @@ pub struct Field {
 
 impl Field {
     /// Finds the position span of the argument in the given field attribute.
-    /// If not found, returns an empty span.
-    pub(crate) fn span_for_argument(&self, attribute: &str, argument: &str) -> Span {
+    pub(crate) fn span_for_argument(&self, attribute: &str, argument: &str) -> Option<Span> {
         self.attributes
             .iter()
             .filter(|a| a.name() == attribute)
@@ -31,7 +30,20 @@ impl Field {
             .filter(|a| a.name() == argument)
             .map(|a| a.span)
             .next()
-            .unwrap_or_else(Span::empty)
+    }
+
+    /// Finds the position span of the given attribute.
+    pub(crate) fn span_for_attribute(&self, attribute: &str) -> Option<Span> {
+        self.attributes
+            .iter()
+            .filter(|a| a.name() == attribute)
+            .map(|a| a.span)
+            .next()
+    }
+
+    /// The name of the field
+    pub fn name(&self) -> &str {
+        &self.name.name
     }
 }
 

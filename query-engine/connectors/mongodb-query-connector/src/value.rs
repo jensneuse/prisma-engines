@@ -79,6 +79,11 @@ impl IntoBson for (MongoDbType, PrismaValue) {
                 )
             }
             (MongoDbType::Array(inner), val) => Bson::Array(vec![(*inner, val).into_bson()?]),
+            (typ, PrismaValue::List(vals)) => Bson::Array(
+                vals.into_iter()
+                    .map(|val| (typ.clone(), val).into_bson())
+                    .collect::<crate::Result<Vec<_>>>()?,
+            ),
 
             // BinData
             (MongoDbType::BinData, PrismaValue::Bytes(bytes)) => Bson::Binary(Binary {
@@ -228,6 +233,7 @@ pub fn value_from_bson(bson: Bson, meta: &OutputMeta) -> crate::Result<PrismaVal
         // Int
         (TypeIdentifier::Int, Bson::Int64(i)) => PrismaValue::Int(i),
         (TypeIdentifier::Int, Bson::Int32(i)) => PrismaValue::Int(i as i64),
+        (TypeIdentifier::Int, Bson::Double(i)) => PrismaValue::Int(i as i64),
 
         // BigInt
         (TypeIdentifier::BigInt, Bson::Int64(i)) => PrismaValue::BigInt(i),
@@ -270,7 +276,7 @@ pub fn value_from_bson(bson: Bson, meta: &OutputMeta) -> crate::Result<PrismaVal
 
         (ident, bson) => {
             return Err(MongoError::UnhandledError(format!(
-                "Converting BSON to type {:?}. Data: '{}'",
+                "Converting BSON to type {:?}. Data: {:?}",
                 ident, bson
             )))
         }

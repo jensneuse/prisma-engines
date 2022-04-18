@@ -1,23 +1,20 @@
 use crate::{
-    connect, connection_wrapper::Connection, error::quaint_error_to_connector_error, sql_renderer::IteratorJoin,
+    connection_wrapper::{connect, Connection},
+    sql_renderer::IteratorJoin,
     SqlFlavour, SqlMigrationConnector,
 };
 use datamodel::common::preview_features::PreviewFeature;
 use enumflags2::BitFlags;
 use indoc::indoc;
 use migration_connector::{migrations_directory::MigrationDirectory, ConnectorError, ConnectorResult};
-use quaint::{
-    connector::{tokio_postgres::error::ErrorPosition, PostgresUrl},
-    error::ErrorKind as QuaintKind,
-};
-use sql_schema_describer::{DescriberErrorKind, SqlSchema, SqlSchemaDescriberBackend};
+use quaint::connector::{tokio_postgres::error::ErrorPosition, PostgresUrl};
+use sql_schema_describer::SqlSchema;
 use std::collections::HashMap;
 use url::Url;
 use user_facing_errors::{
     common::{DatabaseAccessDenied, DatabaseDoesNotExist},
-    introspection_engine::DatabaseSchemaInconsistent,
     migration_engine::{self, ApplyMigrationError},
-    KnownError, UserFacingError,
+    UserFacingError,
 };
 
 const ADVISORY_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -53,7 +50,7 @@ impl PostgresFlavour {
             let shadow_conninfo = conn.connection_info();
             let main_conninfo = main_connection.connection_info();
 
-            super::validate_connection_infos_do_not_match((&shadow_conninfo, &main_conninfo))?;
+            super::validate_connection_infos_do_not_match((shadow_conninfo, main_conninfo))?;
 
             tracing::info!(
                 "Connecting to user-provided shadow database at {}.{:?}",
@@ -221,10 +218,10 @@ impl SqlFlavour for PostgresFlavour {
 
         match conn.raw_cmd(&query).await {
             Ok(_) => (),
-            Err(err) if matches!(err.kind(), QuaintKind::DatabaseAlreadyExists { .. }) => {
+            Err(err) if err.is_user_facing_error::<user_facing_errors::common::DatabaseAlreadyExists>() => {
                 database_already_exists_error = Some(err)
             }
-            Err(err) if matches!(err.kind(), QuaintKind::UniqueConstraintViolation { .. }) => {
+            Err(err) if err.is_user_facing_error::<user_facing_errors::query_engine::UniqueKeyViolation>() => {
                 database_already_exists_error = Some(err)
             }
             Err(err) => return Err(err.into()),
@@ -263,24 +260,6 @@ impl SqlFlavour for PostgresFlavour {
         Ok(connection.raw_cmd(sql).await?)
     }
 
-    async fn describe_schema<'a>(&'a self, connection: &Connection) -> ConnectorResult<SqlSchema> {
-        sql_schema_describer::postgres::SqlSchemaDescriber::new(connection.queryable(), Default::default())
-            .describe(connection.connection_info().schema_name())
-            .await
-            .map_err(|err| match err.into_kind() {
-                DescriberErrorKind::QuaintError(err) => {
-                    quaint_error_to_connector_error(err, &connection.connection_info())
-                }
-                e @ DescriberErrorKind::CrossSchemaReference { .. } => {
-                    let err = KnownError::new(DatabaseSchemaInconsistent {
-                        explanation: format!("{}", e),
-                    });
-
-                    ConnectorError::from(err)
-                }
-            })
-    }
-
     async fn drop_database(&self, database_str: &str) -> ConnectorResult<()> {
         let mut url = Url::parse(database_str).map_err(ConnectorError::url_parse_error)?;
         let db_name = url.path().trim_start_matches('/').to_owned();
@@ -302,7 +281,7 @@ impl SqlFlavour for PostgresFlavour {
 
     #[tracing::instrument]
     async fn ensure_connection_validity(&self, connection: &Connection) -> ConnectorResult<()> {
-        let schema_name = connection.schema_name();
+        let schema_name = connection.connection_info().schema_name();
         let schema_exists_result = connection
             .query_raw(
                 "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1)",
@@ -355,7 +334,7 @@ impl SqlFlavour for PostgresFlavour {
     }
 
     async fn reset(&self, connection: &Connection) -> ConnectorResult<()> {
-        let schema_name = connection.schema_name();
+        let schema_name = connection.connection_info().schema_name();
 
         connection
             .raw_cmd(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
@@ -410,7 +389,7 @@ impl SqlFlavour for PostgresFlavour {
 
                 // The connection to the shadow database is dropped at the end of
                 // the block.
-                self.describe_schema(&shadow_database).await
+                shadow_database.describe_schema().await
             }
         })()
         .await;
